@@ -13,6 +13,7 @@ This repository contains:
 - Keep line length reasonable (aim for 100–120 chars).
 - Don’t introduce new dependencies without clear need and approval.
 - Use consistent formatting and linting defaults; don’t fight the tooling.
+- Keep design and solutions minimalistic. Less is more.
 
 ## Frontend Standards (factory)
 - Stack is fixed: Vite, React 19, TypeScript (strict), Tailwind v4, React Router.
