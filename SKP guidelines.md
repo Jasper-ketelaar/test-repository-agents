@@ -14,8 +14,7 @@ Klein (5–10 SKP)
 	•	Test toevoegen aan bestaande feature → 5 SKP
 
 Middel (15–25 SKP)
-	•	Simpele CRUD
-(nieuwe platte entity, FE + BE, geen relaties) → 20 SKP
+	•	Simpele CRUD (nieuwe platte entity, FE + BE, geen relaties) → 20 SKP
 	•	Uitbreiding bestaande entity (nieuwe relatie of veld met impact) → 15 SKP
 	•	FE component met state + API koppeling → 20 SKP
 	•	Kleine refactor (1 module, geen gedragswijziging) → 15 SKP
