@@ -1,0 +1,62 @@
+name: 'Codex Auto-Implement'
+description: 'Automatically implement a GitHub issue using OpenAI Codex CLI and open a PR'
+
+inputs:
+  issue-number:
+    description: 'GitHub issue number to implement'
+    required: true
+  repo-token:
+    description: 'GitHub token with contents, issues, and pull-requests write permissions'
+    required: true
+  base-branch:
+    description: 'Base branch to create the feature branch from'
+    required: false
+    default: 'main'
+  extra-prompt:
+    description: 'Additional instructions appended to the Codex prompt'
+    required: false
+    default: ''
+  pr-labels:
+    description: 'Comma-separated labels to apply to the created PR'
+    required: false
+    default: 'codex-generated'
+  timeout-minutes:
+    description: 'Timeout in minutes for the Codex execution'
+    required: false
+    default: '30'
+  dashboard-url:
+    description: 'URL of the factory-agents dashboard for status reporting (e.g. http://localhost:3888)'
+    required: false
+    default: ''
+  dashboard-run-id:
+    description: 'Run ID in the dashboard to report status to'
+    required: false
+    default: ''
+
+outputs:
+  pr-number:
+    description: 'The created pull request number'
+    value: ${{ steps.implement.outputs.pr-number }}
+  pr-url:
+    description: 'The created pull request URL'
+    value: ${{ steps.implement.outputs.pr-url }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Implement issue with Codex
+      id: implement
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.repo-token }}
+        ISSUE_NUMBER: ${{ inputs.issue-number }}
+        BASE_BRANCH: ${{ inputs.base-branch }}
+        EXTRA_PROMPT: ${{ inputs.extra-prompt }}
+        PR_LABELS: ${{ inputs.pr-labels }}
+        TIMEOUT_MINUTES: ${{ inputs.timeout-minutes }}
+        DASHBOARD_URL: ${{ inputs.dashboard-url }}
+        DASHBOARD_RUN_ID: ${{ inputs.dashboard-run-id }}
+        ACTION_PATH: ${{ github.action_path }}
+      run: |
+        chmod +x "$ACTION_PATH/scripts/implement-issue.sh"
+        "$ACTION_PATH/scripts/implement-issue.sh"
