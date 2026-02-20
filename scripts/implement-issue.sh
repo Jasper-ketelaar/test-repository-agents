@@ -468,18 +468,18 @@ phase_implement() {
 
   run_codex_phase "implement" "$prompt"
 
-  if git diff --quiet && git diff --cached --quiet; then
+  git add -A
+
+  if git diff --cached --quiet; then
     cleanup_on_error "Codex completed but made no changes to the codebase"
   fi
 
   local changed_files file_count
-  changed_files=$( (git diff --name-only; git diff --cached --name-only) | sort -u )
+  changed_files=$(git diff --cached --name-only | sort -u)
   file_count=$(echo "$changed_files" | sed '/^$/d' | wc -l | tr -d ' ')
 
   log_info "Changed files ($file_count):"
   echo "$changed_files"
-
-  git add -A
 
   local commit_prefix="Implement"
   [[ "$task_type" == "bugfix" ]] && commit_prefix="Fix"
