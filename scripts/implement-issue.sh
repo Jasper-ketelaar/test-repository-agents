@@ -1,20 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# ---------------------------------------------------------------------------
-# implement-issue.sh
-#
-# Orchestrates: fetch issue → pick prompt → branch → codex exec → commit → PR
-# Expected env vars (set by action.yml):
-#   GITHUB_TOKEN, ISSUE_NUMBER, BASE_BRANCH, EXTRA_PROMPT,
-#   PR_LABELS, TIMEOUT_MINUTES, ACTION_PATH
-# Optional:
-#   FACTORY_API_URL - Factory backend base URL (e.g. https://factory.silver-key.nl)
-#   FACTORY_API_TOKEN - Shared token for /api/agent-runs/external/{id}
-#   FACTORY_RUN_ID - Run ID used for Factory backend tracking
-# Legacy fallback (deprecated):
-#   DASHBOARD_URL, DASHBOARD_RUN_ID
-# ---------------------------------------------------------------------------
+PHASE="${1:-}"
+if [[ -z "$PHASE" ]]; then
+  echo "Usage: implement-issue.sh <research|plan|implement|review>" >&2
+  exit 1
+fi
+
+case "$PHASE" in
+  research|plan|implement|review) ;;
+  *)
+    echo "Invalid phase '$PHASE'. Use: research|plan|implement|review" >&2
+    exit 1
+    ;;
+esac
 
 log_info()  { echo "[INFO]  $(date '+%H:%M:%S') $*"; }
 log_warn()  { echo "[WARN]  $(date '+%H:%M:%S') $*" >&2; }
@@ -25,6 +24,15 @@ FACTORY_RUN_ID="${FACTORY_RUN_ID:-${DASHBOARD_RUN_ID:-}}"
 if [[ -z "${FACTORY_RUN_ID:-}" && -n "${GITHUB_RUN_ID:-}" ]]; then
   FACTORY_RUN_ID="gh-${GITHUB_RUN_ID}-${ISSUE_NUMBER:-0}"
 fi
+
+STATE_DIR="${RUNNER_TEMP:-/tmp}/factory-agents/${GITHUB_RUN_ID:-local}-${ISSUE_NUMBER:-0}"
+STATE_FILE="$STATE_DIR/state.json"
+ISSUE_FILE="$STATE_DIR/issue.json"
+RESEARCH_FILE="$STATE_DIR/research.md"
+PLAN_FILE="$STATE_DIR/plan.md"
+REVIEW_FILE="$STATE_DIR/review.md"
+
+mkdir -p "$STATE_DIR"
 
 json_escape() {
   local value="$1"
@@ -37,10 +45,51 @@ json_escape() {
   printf '"%s"' "$escaped"
 }
 
+state_get() {
+  local expr="$1"
+  if [[ ! -f "$STATE_FILE" ]]; then
+    echo ""
+    return 0
+  fi
+  jq -r "$expr // empty" "$STATE_FILE" 2>/dev/null || true
+}
+
+state_set_string() {
+  local key="$1"
+  local value="$2"
+  local tmp_file
+  tmp_file=$(mktemp)
+  if [[ -f "$STATE_FILE" ]]; then
+    jq --arg k "$key" --arg v "$value" '.[$k]=$v' "$STATE_FILE" > "$tmp_file"
+  else
+    jq -n --arg k "$key" --arg v "$value" '{($k):$v}' > "$tmp_file"
+  fi
+  mv "$tmp_file" "$STATE_FILE"
+}
+
+state_set_bool() {
+  local key="$1"
+  local value="$2"
+  local tmp_file
+  tmp_file=$(mktemp)
+  if [[ -f "$STATE_FILE" ]]; then
+    jq --arg k "$key" --argjson v "$value" '.[$k]=$v' "$STATE_FILE" > "$tmp_file"
+  else
+    jq -n --arg k "$key" --argjson v "$value" '{($k):$v}' > "$tmp_file"
+  fi
+  mv "$tmp_file" "$STATE_FILE"
+}
+
 build_factory_metadata() {
   local issue_number="0"
   if [[ "${ISSUE_NUMBER:-}" =~ ^[0-9]+$ ]]; then
     issue_number="${ISSUE_NUMBER}"
+  fi
+
+  local state_issue_number
+  state_issue_number=$(state_get '.issueNumber')
+  if [[ "$state_issue_number" =~ ^[0-9]+$ ]]; then
+    issue_number="$state_issue_number"
   fi
 
   local workflow_run_id="null"
@@ -48,10 +97,16 @@ build_factory_metadata() {
     workflow_run_id="${GITHUB_RUN_ID}"
   fi
 
+  local issue_title task_type
+  issue_title=$(state_get '.issueTitle')
+  task_type=$(state_get '.taskType')
+  [[ -z "$issue_title" ]] && issue_title="Issue #${issue_number}"
+  [[ -z "$task_type" ]] && task_type="feature"
+
   local repo_json issue_title_json task_type_json trigger_json workflow_url_json
   repo_json=$(json_escape "${GITHUB_REPOSITORY:-unknown/unknown}")
-  issue_title_json=$(json_escape "${ISSUE_TITLE:-Issue #${issue_number}}")
-  task_type_json=$(json_escape "${TASK_TYPE:-feature}")
+  issue_title_json=$(json_escape "$issue_title")
+  task_type_json=$(json_escape "$task_type")
   trigger_json=$(json_escape "workflow")
   workflow_url_json=$(json_escape "${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY:-unknown/unknown}/actions/runs/${GITHUB_RUN_ID:-}")
 
@@ -71,9 +126,6 @@ factory_update() {
     -d "$json" > /dev/null 2>&1 || true
 }
 
-BRANCH_NAME=""
-PUSHED=false
-
 cleanup_on_error() {
   local msg="${1:-Unexpected error}"
   log_error "$msg"
@@ -83,21 +135,25 @@ cleanup_on_error() {
   factory_update "{$(build_factory_metadata),\"status\":\"failed\",\"error\":${escaped_msg},\"finishedAt\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}"
 
   if command -v gh >/dev/null 2>&1 && [[ "${ISSUE_NUMBER:-}" =~ ^[0-9]+$ ]]; then
-    gh issue comment "$ISSUE_NUMBER" --body "$(cat <<EOF
+    gh issue comment "$ISSUE_NUMBER" --body "$(cat <<MSG
 ❌ **Codex auto-implementation failed**
 
+**Phase**: \\`$PHASE\\`
 **Error**: $msg
 
 See workflow run for details: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID
-EOF
+MSG
 )" || true
-  else
-    log_warn "Skipping issue comment because gh CLI is unavailable"
   fi
 
-  if [[ "$PUSHED" == true && -n "$BRANCH_NAME" ]]; then
-    log_warn "Cleaning up remote branch $BRANCH_NAME"
-    git push origin --delete "$BRANCH_NAME" 2>/dev/null || true
+  local pushed branch_name pr_number
+  pushed=$(state_get '.pushed')
+  branch_name=$(state_get '.branchName')
+  pr_number=$(state_get '.prNumber')
+
+  if [[ "$pushed" == "true" && -n "$branch_name" && -z "$pr_number" ]]; then
+    log_warn "Cleaning up remote branch $branch_name"
+    git push origin --delete "$branch_name" > /dev/null 2>&1 || true
   fi
 
   exit 1
@@ -105,73 +161,19 @@ EOF
 
 trap 'cleanup_on_error' ERR
 
-# ── 1. Validate prerequisites ──────────────────────────────────────────────
+ensure_prerequisites() {
+  for cmd in gh git codex jq; do
+    if ! command -v "$cmd" >/dev/null 2>&1; then
+      cleanup_on_error "$cmd is not installed or not on PATH"
+    fi
+  done
 
-for cmd in gh git codex jq; do
-  if ! command -v "$cmd" &>/dev/null; then
-    cleanup_on_error "$cmd is not installed or not on PATH"
-  fi
-done
-
-for var in GITHUB_TOKEN ISSUE_NUMBER BASE_BRANCH ACTION_PATH; do
-  if [[ -z "${!var:-}" ]]; then
-    cleanup_on_error "Required env var $var is not set"
-  fi
-done
-
-log_info "Codex version: $(codex --version 2>&1 || echo 'unknown')"
-
-# ── 2. Fetch issue details ─────────────────────────────────────────────────
-
-log_info "Fetching issue #$ISSUE_NUMBER"
-
-ISSUE_JSON=$(gh issue view "$ISSUE_NUMBER" --json title,body,labels)
-ISSUE_TITLE=$(echo "$ISSUE_JSON" | jq -r '.title')
-ISSUE_BODY=$(echo "$ISSUE_JSON"  | jq -r '.body // ""')
-ISSUE_LABELS=$(echo "$ISSUE_JSON" | jq -r '[.labels[].name] | map(ascii_downcase) | join(",")')
-
-log_info "Issue: $ISSUE_TITLE"
-log_info "Labels: ${ISSUE_LABELS:-none}"
-
-# ── 3. Determine task type from labels ─────────────────────────────────────
-
-if echo "$ISSUE_LABELS" | grep -q "bug"; then
-  TASK_TYPE="bugfix"
-elif echo "$ISSUE_LABELS" | grep -q "refactor"; then
-  TASK_TYPE="refactor"
-else
-  TASK_TYPE="feature"
-fi
-
-log_info "Task type: $TASK_TYPE"
-
-factory_update "{$(build_factory_metadata),\"status\":\"queued\"}"
-
-# ── 4. Build prompt ────────────────────────────────────────────────────────
-
-PROMPT=""
-
-if [[ -f "$ACTION_PATH/prompts/base.md" ]]; then
-  PROMPT=$(cat "$ACTION_PATH/prompts/base.md")
-fi
-
-TASK_PROMPT_FILE="$ACTION_PATH/prompts/${TASK_TYPE}.md"
-if [[ -f "$TASK_PROMPT_FILE" ]]; then
-  PROMPT="$PROMPT"$'\n\n'"$(cat "$TASK_PROMPT_FILE")"
-fi
-
-PROMPT="$PROMPT"$'\n\n'"## Issue #${ISSUE_NUMBER}: ${ISSUE_TITLE}"$'\n\n'"${ISSUE_BODY}"
-
-if [[ -f "CLAUDE.md" ]]; then
-  log_info "Found CLAUDE.md — appending repo coding standards"
-  PROMPT="$PROMPT"$'\n\n'"## Repository Coding Standards"$'\n\n'"$(cat CLAUDE.md)"
-fi
-
-if [[ -n "${EXTRA_PROMPT:-}" ]]; then
-  PROMPT="$PROMPT"$'\n\n'"## Additional Instructions"$'\n\n'"$EXTRA_PROMPT"
-fi
-
-# ── 5. Create branch ──────────────────────────────────────────────────────
+  for var in GITHUB_TOKEN ISSUE_NUMBER BASE_BRANCH ACTION_PATH; do
+    if [[ -z "${!var:-}" ]]; then
+      cleanup_on_error "Required env var $var is not set"
+    fi
+  done
+}
 
 resolve_base_branch() {
   local requested="${BASE_BRANCH:-}"
@@ -209,98 +211,299 @@ resolve_base_branch() {
   log_info "Using base branch: $BASE_BRANCH"
 }
 
-resolve_base_branch
+run_codex_phase() {
+  local phase_name="$1"
+  local prompt="$2"
+  local output_file="${3:-}"
+  local timeout_seconds=$(( ${TIMEOUT_MINUTES:-30} * 60 ))
 
-BRANCH_NAME="codex/issue-${ISSUE_NUMBER}"
+  local prompt_file
+  prompt_file=$(mktemp)
+  printf '%s' "$prompt" > "$prompt_file"
 
-git fetch origin "$BASE_BRANCH"
+  local -a cmd
+  cmd=(codex exec --full-auto)
 
-if git ls-remote --heads origin "$BRANCH_NAME" | grep -q "$BRANCH_NAME"; then
-  BRANCH_NAME="codex/issue-${ISSUE_NUMBER}-$(date +%s)"
-  log_warn "Branch already exists, using $BRANCH_NAME"
-fi
-
-git checkout -b "$BRANCH_NAME" "origin/$BASE_BRANCH"
-git config --local user.name "Codex Bot"
-git config --local user.email "codex-bot@silver-key.nl"
-
-log_info "Created branch $BRANCH_NAME"
-
-BRANCH_JSON=$(json_escape "$BRANCH_NAME")
-factory_update "{$(build_factory_metadata),\"status\":\"running\",\"branch\":${BRANCH_JSON},\"startedAt\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}"
-
-# ── 6. Run Codex ──────────────────────────────────────────────────────────
-
-TIMEOUT_SECONDS=$(( ${TIMEOUT_MINUTES:-30} * 60 ))
-
-log_info "Running Codex (timeout: ${TIMEOUT_MINUTES:-30}m)"
-
-# codex-cli 0.104.0+ accepts prompt as a positional argument for `exec`.
-codex exec --full-auto "$PROMPT" &
-CODEX_PID=$!
-
-ELAPSED=0
-while kill -0 "$CODEX_PID" 2>/dev/null; do
-  if (( ELAPSED >= TIMEOUT_SECONDS )); then
-    kill "$CODEX_PID" 2>/dev/null || true
-    wait "$CODEX_PID" 2>/dev/null || true
-    cleanup_on_error "Codex timed out after ${TIMEOUT_MINUTES:-30} minutes"
+  if [[ "$phase_name" != "implement" ]]; then
+    cmd+=(--sandbox read-only)
   fi
-  sleep 5
-  ELAPSED=$((ELAPSED + 5))
-done
 
-set +e
-wait "$CODEX_PID"
-CODEX_EXIT=$?
-set -e
+  if [[ -n "$output_file" ]]; then
+    cmd+=(--output-last-message "$output_file")
+  fi
 
-if [[ $CODEX_EXIT -ne 0 ]]; then
-  cleanup_on_error "Codex exited with code $CODEX_EXIT"
-fi
+  cmd+=("-")
 
-log_info "Codex finished successfully"
+  log_info "Running Codex phase '$phase_name' (timeout: ${TIMEOUT_MINUTES:-30}m)"
 
-# ── 7. Check for changes ──────────────────────────────────────────────────
+  "${cmd[@]}" < "$prompt_file" &
+  local codex_pid=$!
+  local elapsed=0
 
-if git diff --quiet && git diff --cached --quiet; then
-  cleanup_on_error "Codex completed but made no changes to the codebase"
-fi
+  while kill -0 "$codex_pid" 2>/dev/null; do
+    if (( elapsed >= timeout_seconds )); then
+      kill "$codex_pid" 2>/dev/null || true
+      wait "$codex_pid" 2>/dev/null || true
+      rm -f "$prompt_file"
+      cleanup_on_error "Codex phase '$phase_name' timed out after ${TIMEOUT_MINUTES:-30} minutes"
+    fi
+    sleep 5
+    elapsed=$((elapsed + 5))
+  done
 
-CHANGED_FILES=$( (git diff --name-only; git diff --cached --name-only) | sort -u )
-FILE_COUNT=$(echo "$CHANGED_FILES" | wc -l | tr -d ' ')
+  set +e
+  wait "$codex_pid"
+  local codex_exit=$?
+  set -e
 
-log_info "Changed files ($FILE_COUNT):"
-echo "$CHANGED_FILES"
+  rm -f "$prompt_file"
 
-# ── 8. Commit and push ───────────────────────────────────────────────────
+  if [[ $codex_exit -ne 0 ]]; then
+    cleanup_on_error "Codex phase '$phase_name' exited with code $codex_exit"
+  fi
 
-git add -A
+  log_info "Codex phase '$phase_name' completed"
+}
 
-COMMIT_PREFIX="Implement"
-[[ "$TASK_TYPE" == "bugfix" ]] && COMMIT_PREFIX="Fix"
-[[ "$TASK_TYPE" == "refactor" ]] && COMMIT_PREFIX="Refactor"
+phase_research() {
+  log_info "Phase 1/4: Research"
 
-git commit -m "$COMMIT_PREFIX #${ISSUE_NUMBER}: ${ISSUE_TITLE}
+  if [[ ! "${ISSUE_NUMBER}" =~ ^[0-9]+$ ]]; then
+    cleanup_on_error "ISSUE_NUMBER must be numeric"
+  fi
+
+  log_info "Fetching issue #$ISSUE_NUMBER"
+  local issue_json issue_title issue_body issue_labels task_type
+  issue_json=$(gh issue view "$ISSUE_NUMBER" --json title,body,labels)
+  issue_title=$(echo "$issue_json" | jq -r '.title')
+  issue_body=$(echo "$issue_json" | jq -r '.body // ""')
+  issue_labels=$(echo "$issue_json" | jq -r '[.labels[].name] | map(ascii_downcase) | join(",")')
+  echo "$issue_json" > "$ISSUE_FILE"
+
+  if echo "$issue_labels" | grep -q "bug"; then
+    task_type="bugfix"
+  elif echo "$issue_labels" | grep -q "refactor"; then
+    task_type="refactor"
+  else
+    task_type="feature"
+  fi
+
+  resolve_base_branch
+
+  jq -n \
+    --argjson issueNumber "$ISSUE_NUMBER" \
+    --arg issueTitle "$issue_title" \
+    --arg issueBody "$issue_body" \
+    --arg issueLabels "$issue_labels" \
+    --arg taskType "$task_type" \
+    --arg baseBranch "$BASE_BRANCH" \
+    --arg stateDir "$STATE_DIR" \
+    --arg researchFile "$RESEARCH_FILE" \
+    --arg planFile "$PLAN_FILE" \
+    --arg reviewFile "$REVIEW_FILE" \
+    '{
+      issueNumber: $issueNumber,
+      issueTitle: $issueTitle,
+      issueBody: $issueBody,
+      issueLabels: $issueLabels,
+      taskType: $taskType,
+      baseBranch: $baseBranch,
+      branchName: "",
+      pushed: false,
+      prNumber: "",
+      prUrl: "",
+      stateDir: $stateDir,
+      researchFile: $researchFile,
+      planFile: $planFile,
+      reviewFile: $reviewFile
+    }' > "$STATE_FILE"
+
+  factory_update "{$(build_factory_metadata),\"status\":\"queued\",\"phase\":\"research\"}"
+
+  local prompt=""
+  if [[ -f "$ACTION_PATH/prompts/research.md" ]]; then
+    prompt=$(cat "$ACTION_PATH/prompts/research.md")
+  fi
+
+  prompt="$prompt"$'\n\n'"## Issue #${ISSUE_NUMBER}: ${issue_title}"$'\n\n'"${issue_body}"
+  prompt="$prompt"$'\n\n'"## Labels"$'\n\n'"${issue_labels:-none}"
+  prompt="$prompt"$'\n\n'"## Task Type"$'\n\n'"${task_type}"
+
+  if [[ -f "CLAUDE.md" ]]; then
+    prompt="$prompt"$'\n\n'"## Repository Coding Standards"$'\n\n'"$(cat CLAUDE.md)"
+  fi
+
+  if [[ -n "${EXTRA_PROMPT:-}" ]]; then
+    prompt="$prompt"$'\n\n'"## Additional Instructions"$'\n\n'"$EXTRA_PROMPT"
+  fi
+
+  prompt="$prompt"$'\n\n'"Return only Markdown for the required sections."
+
+  run_codex_phase "research" "$prompt" "$RESEARCH_FILE"
+
+  if [[ ! -s "$RESEARCH_FILE" ]]; then
+    cleanup_on_error "Research phase did not produce output"
+  fi
+
+  log_info "Research written to $RESEARCH_FILE"
+}
+
+phase_plan() {
+  log_info "Phase 2/4: Plan"
+
+  if [[ ! -f "$STATE_FILE" ]]; then
+    cleanup_on_error "State file not found. Run research phase first."
+  fi
+
+  local research_path issue_title issue_body issue_labels task_type
+  research_path=$(state_get '.researchFile')
+  [[ -z "$research_path" ]] && research_path="$RESEARCH_FILE"
+
+  if [[ ! -s "$research_path" ]]; then
+    cleanup_on_error "Research artifact not found. Run research phase first."
+  fi
+
+  issue_title=$(state_get '.issueTitle')
+  issue_body=$(state_get '.issueBody')
+  issue_labels=$(state_get '.issueLabels')
+  task_type=$(state_get '.taskType')
+
+  local prompt=""
+  if [[ -f "$ACTION_PATH/prompts/plan.md" ]]; then
+    prompt=$(cat "$ACTION_PATH/prompts/plan.md")
+  fi
+
+  prompt="$prompt"$'\n\n'"## Issue #${ISSUE_NUMBER}: ${issue_title}"$'\n\n'"${issue_body}"
+  prompt="$prompt"$'\n\n'"## Labels"$'\n\n'"${issue_labels:-none}"
+  prompt="$prompt"$'\n\n'"## Task Type"$'\n\n'"${task_type}"
+  prompt="$prompt"$'\n\n'"## Research Findings"$'\n\n'"$(cat "$research_path")"
+
+  if [[ -n "${EXTRA_PROMPT:-}" ]]; then
+    prompt="$prompt"$'\n\n'"## Additional Instructions"$'\n\n'"$EXTRA_PROMPT"
+  fi
+
+  prompt="$prompt"$'\n\n'"Return only Markdown for the required sections."
+
+  run_codex_phase "plan" "$prompt" "$PLAN_FILE"
+
+  if [[ ! -s "$PLAN_FILE" ]]; then
+    cleanup_on_error "Plan phase did not produce output"
+  fi
+
+  log_info "Plan written to $PLAN_FILE"
+}
+
+phase_implement() {
+  log_info "Phase 3/4: Implement"
+
+  if [[ ! -f "$STATE_FILE" ]]; then
+    cleanup_on_error "State file not found. Run research and plan phases first."
+  fi
+
+  local issue_title issue_body issue_labels task_type planned_base_branch
+  issue_title=$(state_get '.issueTitle')
+  issue_body=$(state_get '.issueBody')
+  issue_labels=$(state_get '.issueLabels')
+  task_type=$(state_get '.taskType')
+  planned_base_branch=$(state_get '.baseBranch')
+
+  if [[ -z "$issue_title" || -z "$task_type" ]]; then
+    cleanup_on_error "State is incomplete. Run research phase first."
+  fi
+
+  if [[ -n "$planned_base_branch" ]]; then
+    BASE_BRANCH="$planned_base_branch"
+  fi
+
+  if [[ ! -s "$RESEARCH_FILE" || ! -s "$PLAN_FILE" ]]; then
+    cleanup_on_error "Research/plan artifacts are missing. Run research and plan phases first."
+  fi
+
+  resolve_base_branch
+
+  local branch_name="codex/issue-${ISSUE_NUMBER}"
+  git fetch origin "$BASE_BRANCH"
+
+  if git show-ref --verify --quiet "refs/heads/${branch_name}" || git ls-remote --heads origin "$branch_name" | grep -q "$branch_name"; then
+    branch_name="codex/issue-${ISSUE_NUMBER}-$(date +%s)"
+    log_warn "Branch already exists, using $branch_name"
+  fi
+
+  git checkout -b "$branch_name" "origin/$BASE_BRANCH"
+  git config --local user.name "Codex Bot"
+  git config --local user.email "codex-bot@silver-key.nl"
+
+  state_set_string "branchName" "$branch_name"
+  state_set_bool "pushed" false
+  state_set_string "prNumber" ""
+  state_set_string "prUrl" ""
+
+  local branch_json
+  branch_json=$(json_escape "$branch_name")
+  factory_update "{$(build_factory_metadata),\"status\":\"running\",\"phase\":\"implement\",\"branch\":${branch_json},\"startedAt\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}"
+
+  local prompt=""
+  if [[ -f "$ACTION_PATH/prompts/base.md" ]]; then
+    prompt=$(cat "$ACTION_PATH/prompts/base.md")
+  fi
+
+  local task_prompt_file="$ACTION_PATH/prompts/${task_type}.md"
+  if [[ -f "$task_prompt_file" ]]; then
+    prompt="$prompt"$'\n\n'"$(cat "$task_prompt_file")"
+  fi
+
+  prompt="$prompt"$'\n\n'"## Issue #${ISSUE_NUMBER}: ${issue_title}"$'\n\n'"${issue_body}"
+  prompt="$prompt"$'\n\n'"## Labels"$'\n\n'"${issue_labels:-none}"
+  prompt="$prompt"$'\n\n'"## Research Findings"$'\n\n'"$(cat "$RESEARCH_FILE")"
+  prompt="$prompt"$'\n\n'"## Approved Plan"$'\n\n'"$(cat "$PLAN_FILE")"
+  prompt="$prompt"$'\n\n'"## Implementation Requirements"$'\n\n'"- Implement the issue according to the approved plan."$'\n'"- Keep scope aligned to the issue."$'\n'"- Do not modify research/plan artifacts."
+
+  if [[ -f "CLAUDE.md" ]]; then
+    prompt="$prompt"$'\n\n'"## Repository Coding Standards"$'\n\n'"$(cat CLAUDE.md)"
+  fi
+
+  if [[ -n "${EXTRA_PROMPT:-}" ]]; then
+    prompt="$prompt"$'\n\n'"## Additional Instructions"$'\n\n'"$EXTRA_PROMPT"
+  fi
+
+  run_codex_phase "implement" "$prompt"
+
+  if git diff --quiet && git diff --cached --quiet; then
+    cleanup_on_error "Codex completed but made no changes to the codebase"
+  fi
+
+  local changed_files file_count
+  changed_files=$( (git diff --name-only; git diff --cached --name-only) | sort -u )
+  file_count=$(echo "$changed_files" | sed '/^$/d' | wc -l | tr -d ' ')
+
+  log_info "Changed files ($file_count):"
+  echo "$changed_files"
+
+  git add -A
+
+  local commit_prefix="Implement"
+  [[ "$task_type" == "bugfix" ]] && commit_prefix="Fix"
+  [[ "$task_type" == "refactor" ]] && commit_prefix="Refactor"
+
+  git commit -m "$commit_prefix #${ISSUE_NUMBER}: ${issue_title}
 
 Generated by Codex CLI"
 
-git push -u origin "$BRANCH_NAME"
-PUSHED=true
+  git push -u origin "$branch_name"
+  state_set_bool "pushed" true
 
-log_info "Pushed branch $BRANCH_NAME"
+  log_info "Pushed branch $branch_name"
 
-# ── 9. Create PR ─────────────────────────────────────────────────────────
+  local pr_title pr_body pr_url pr_number
+  pr_title="${commit_prefix} #${ISSUE_NUMBER}: ${issue_title}"
 
-PR_TITLE="${COMMIT_PREFIX} #${ISSUE_NUMBER}: ${ISSUE_TITLE}"
-
-PR_BODY="$(cat <<EOF
+  pr_body="$(cat <<BODY
 ## Automated Implementation
 
 This PR was generated by Codex CLI to address issue #${ISSUE_NUMBER}.
 
 ### Task type
-\`${TASK_TYPE}\`
+\`${task_type}\`
 
 ### Files changed
 \`\`\`
@@ -310,55 +513,140 @@ $(git diff --stat "origin/${BASE_BRANCH}..HEAD")
 Closes #${ISSUE_NUMBER}
 
 ---
-🤖 Generated by [Codex CLI](https://github.com/openai/codex) via factory-agents
-EOF
+Generated by [Codex CLI](https://github.com/openai/codex) via factory-agents
+BODY
 )"
 
-PR_URL=$(gh pr create \
-  --base "$BASE_BRANCH" \
-  --head "$BRANCH_NAME" \
-  --title "$PR_TITLE" \
-  --body "$PR_BODY")
+  pr_url=$(gh pr create \
+    --base "$BASE_BRANCH" \
+    --head "$branch_name" \
+    --title "$pr_title" \
+    --body "$pr_body")
 
-PR_NUMBER=$(echo "$PR_URL" | grep -o '[0-9]*$')
-
-log_info "Created PR #$PR_NUMBER: $PR_URL"
-
-# Add labels in a best-effort way; create missing labels automatically.
-IFS=',' read -ra LABELS <<< "${PR_LABELS:-}"
-for label in "${LABELS[@]}"; do
-  label=$(echo "$label" | xargs)
-  [[ -z "$label" ]] && continue
-
-  if ! gh label create "$label" --description "Auto-generated by factory-agents" --color "0E8A16" --force >/dev/null 2>&1; then
-    log_warn "Could not create or update label '$label'; continuing without failing"
+  pr_number=$(echo "$pr_url" | grep -o '[0-9]*$')
+  if [[ -z "$pr_number" ]]; then
+    cleanup_on_error "Failed to parse PR number from URL: $pr_url"
   fi
 
-  if ! gh pr edit "$PR_NUMBER" --add-label "$label" >/dev/null 2>&1; then
-    log_warn "Could not add label '$label' to PR #$PR_NUMBER"
+  log_info "Created PR #$pr_number: $pr_url"
+
+  local label
+  IFS=',' read -ra labels <<< "${PR_LABELS:-}"
+  for label in "${labels[@]}"; do
+    label=$(echo "$label" | xargs)
+    [[ -z "$label" ]] && continue
+
+    if ! gh label create "$label" --description "Auto-generated by factory-agents" --color "0E8A16" --force >/dev/null 2>&1; then
+      log_warn "Could not create or update label '$label'; continuing without failing"
+    fi
+
+    if ! gh pr edit "$pr_number" --add-label "$label" >/dev/null 2>&1; then
+      log_warn "Could not add label '$label' to PR #$pr_number"
+    fi
+  done
+
+  state_set_string "prNumber" "$pr_number"
+  state_set_string "prUrl" "$pr_url"
+
+  local pr_url_json pr_number_json
+  pr_url_json=$(json_escape "$pr_url")
+  pr_number_json="null"
+  if [[ "$pr_number" =~ ^[0-9]+$ ]]; then
+    pr_number_json="$pr_number"
   fi
-done
 
-PR_URL_JSON=$(json_escape "$PR_URL")
-factory_update "{$(build_factory_metadata),\"status\":\"success\",\"prNumber\":$PR_NUMBER,\"prUrl\":${PR_URL_JSON},\"finishedAt\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}"
+  factory_update "{$(build_factory_metadata),\"status\":\"success\",\"phase\":\"implement\",\"prNumber\":${pr_number_json},\"prUrl\":${pr_url_json},\"finishedAt\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}"
 
-# ── 10. Comment on issue ─────────────────────────────────────────────────
-
-gh issue comment "$ISSUE_NUMBER" --body "$(cat <<EOF
+  gh issue comment "$ISSUE_NUMBER" --body "$(cat <<MSG
 ✅ **Codex auto-implementation complete**
 
-Pull request: $PR_URL
-Branch: \`$BRANCH_NAME\`
-Task type: \`$TASK_TYPE\`
-Files changed: $FILE_COUNT
+Pull request: $pr_url
+Branch: \`$branch_name\`
+Task type: \`$task_type\`
+Files changed: $file_count
 
-Please review and merge if satisfactory.
-EOF
+A review comment will be posted to the PR in the next step.
+MSG
 )"
 
-# ── 11. Set outputs ──────────────────────────────────────────────────────
+  echo "pr-url=$pr_url" >> "$GITHUB_OUTPUT"
+  echo "pr-number=$pr_number" >> "$GITHUB_OUTPUT"
+}
 
-echo "pr-url=$PR_URL" >> "$GITHUB_OUTPUT"
-echo "pr-number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
+phase_review() {
+  log_info "Phase 4/4: Review"
 
-log_info "Done"
+  if [[ ! -f "$STATE_FILE" ]]; then
+    cleanup_on_error "State file not found. Run previous phases first."
+  fi
+
+  local pr_number issue_title issue_body task_type
+  pr_number=$(state_get '.prNumber')
+  issue_title=$(state_get '.issueTitle')
+  issue_body=$(state_get '.issueBody')
+  task_type=$(state_get '.taskType')
+
+  if [[ -z "$pr_number" ]]; then
+    cleanup_on_error "PR number not found in state. Run implement phase first."
+  fi
+
+  local pr_meta pr_diff
+  pr_meta=$(gh pr view "$pr_number" --json title,body,baseRefName,headRefName,additions,deletions)
+  pr_diff=$(gh pr diff "$pr_number")
+
+  local max_chars=120000
+  if (( ${#pr_diff} > max_chars )); then
+    pr_diff="${pr_diff:0:max_chars}"
+    pr_diff="$pr_diff"$'\n\n[Diff truncated for review context.]'
+  fi
+
+  local prompt=""
+  if [[ -f "$ACTION_PATH/prompts/review.md" ]]; then
+    prompt=$(cat "$ACTION_PATH/prompts/review.md")
+  fi
+
+  prompt="$prompt"$'\n\n'"## Issue #${ISSUE_NUMBER}: ${issue_title}"$'\n\n'"${issue_body}"
+  prompt="$prompt"$'\n\n'"## Task Type"$'\n\n'"${task_type}"
+
+  if [[ -s "$RESEARCH_FILE" ]]; then
+    prompt="$prompt"$'\n\n'"## Research Findings"$'\n\n'"$(cat "$RESEARCH_FILE")"
+  fi
+
+  if [[ -s "$PLAN_FILE" ]]; then
+    prompt="$prompt"$'\n\n'"## Approved Plan"$'\n\n'"$(cat "$PLAN_FILE")"
+  fi
+
+  prompt="$prompt"$'\n\n'"## PR Metadata (JSON)"$'\n\n'"$pr_meta"
+  prompt="$prompt"$'\n\n'"## PR Diff"$'\n\n'"\`\`\`diff"$'\n'"$pr_diff"$'\n'"\`\`\`"
+  prompt="$prompt"$'\n\n'"Return only Markdown suitable for posting directly as a PR comment."
+
+  run_codex_phase "review" "$prompt" "$REVIEW_FILE"
+
+  if [[ ! -s "$REVIEW_FILE" ]]; then
+    cleanup_on_error "Review phase did not produce output"
+  fi
+
+  gh pr comment "$pr_number" --body-file "$REVIEW_FILE"
+
+  log_info "Posted review comment to PR #$pr_number"
+}
+
+ensure_prerequisites
+log_info "Codex version: $(codex --version 2>&1 || echo 'unknown')"
+
+case "$PHASE" in
+  research)
+    phase_research
+    ;;
+  plan)
+    phase_plan
+    ;;
+  implement)
+    phase_implement
+    ;;
+  review)
+    phase_review
+    ;;
+esac
+
+log_info "Phase '$PHASE' done"

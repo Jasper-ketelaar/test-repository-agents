@@ -56,7 +56,51 @@ outputs:
 runs:
   using: 'composite'
   steps:
-    - name: Implement issue with Codex
+    - name: Research
+      id: research
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.repo-token }}
+        GITHUB_TOKEN: ${{ inputs.repo-token }}
+        ISSUE_NUMBER: ${{ inputs.issue-number }}
+        BASE_BRANCH: ${{ inputs.base-branch }}
+        EXTRA_PROMPT: ${{ inputs.extra-prompt }}
+        PR_LABELS: ${{ inputs.pr-labels }}
+        TIMEOUT_MINUTES: ${{ inputs.timeout-minutes }}
+        FACTORY_API_URL: ${{ inputs.factory-api-url }}
+        FACTORY_API_TOKEN: ${{ inputs.factory-api-token }}
+        FACTORY_RUN_ID: ${{ inputs.factory-run-id }}
+        DASHBOARD_URL: ${{ inputs.dashboard-url }}
+        DASHBOARD_RUN_ID: ${{ inputs.dashboard-run-id }}
+        ACTION_PATH: ${{ github.action_path }}
+      run: |
+        chmod +x "$ACTION_PATH/scripts/implement-issue.sh" \
+          "$ACTION_PATH/scripts/research.sh"
+        "$ACTION_PATH/scripts/research.sh"
+
+    - name: Plan
+      id: plan
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.repo-token }}
+        GITHUB_TOKEN: ${{ inputs.repo-token }}
+        ISSUE_NUMBER: ${{ inputs.issue-number }}
+        BASE_BRANCH: ${{ inputs.base-branch }}
+        EXTRA_PROMPT: ${{ inputs.extra-prompt }}
+        PR_LABELS: ${{ inputs.pr-labels }}
+        TIMEOUT_MINUTES: ${{ inputs.timeout-minutes }}
+        FACTORY_API_URL: ${{ inputs.factory-api-url }}
+        FACTORY_API_TOKEN: ${{ inputs.factory-api-token }}
+        FACTORY_RUN_ID: ${{ inputs.factory-run-id }}
+        DASHBOARD_URL: ${{ inputs.dashboard-url }}
+        DASHBOARD_RUN_ID: ${{ inputs.dashboard-run-id }}
+        ACTION_PATH: ${{ github.action_path }}
+      run: |
+        chmod +x "$ACTION_PATH/scripts/implement-issue.sh" \
+          "$ACTION_PATH/scripts/plan.sh"
+        "$ACTION_PATH/scripts/plan.sh"
+
+    - name: Implement
       id: implement
       shell: bash
       env:
@@ -74,5 +118,28 @@ runs:
         DASHBOARD_RUN_ID: ${{ inputs.dashboard-run-id }}
         ACTION_PATH: ${{ github.action_path }}
       run: |
-        chmod +x "$ACTION_PATH/scripts/implement-issue.sh"
-        "$ACTION_PATH/scripts/implement-issue.sh"
+        chmod +x "$ACTION_PATH/scripts/implement-issue.sh" \
+          "$ACTION_PATH/scripts/implement.sh"
+        "$ACTION_PATH/scripts/implement.sh"
+
+    - name: Review
+      id: review
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.repo-token }}
+        GITHUB_TOKEN: ${{ inputs.repo-token }}
+        ISSUE_NUMBER: ${{ inputs.issue-number }}
+        BASE_BRANCH: ${{ inputs.base-branch }}
+        EXTRA_PROMPT: ${{ inputs.extra-prompt }}
+        PR_LABELS: ${{ inputs.pr-labels }}
+        TIMEOUT_MINUTES: ${{ inputs.timeout-minutes }}
+        FACTORY_API_URL: ${{ inputs.factory-api-url }}
+        FACTORY_API_TOKEN: ${{ inputs.factory-api-token }}
+        FACTORY_RUN_ID: ${{ inputs.factory-run-id }}
+        DASHBOARD_URL: ${{ inputs.dashboard-url }}
+        DASHBOARD_RUN_ID: ${{ inputs.dashboard-run-id }}
+        ACTION_PATH: ${{ github.action_path }}
+      run: |
+        chmod +x "$ACTION_PATH/scripts/implement-issue.sh" \
+          "$ACTION_PATH/scripts/review.sh"
+        "$ACTION_PATH/scripts/review.sh"
