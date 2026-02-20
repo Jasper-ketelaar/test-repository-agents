@@ -122,6 +122,44 @@ fi
 
 # ── 5. Create branch ──────────────────────────────────────────────────────
 
+resolve_base_branch() {
+  local requested="${BASE_BRANCH:-}"
+  local resolved=""
+
+  if [[ -n "$requested" ]] && git ls-remote --exit-code --heads origin "$requested" >/dev/null 2>&1; then
+    resolved="$requested"
+  fi
+
+  if [[ -z "$resolved" ]]; then
+    if [[ -n "$requested" ]]; then
+      log_warn "Requested base branch '$requested' not found on origin; attempting auto-detection"
+    fi
+
+    resolved=$(gh repo view --json defaultBranchRef --jq '.defaultBranchRef.name' 2>/dev/null || true)
+
+    if [[ -z "$resolved" ]]; then
+      resolved=$(git remote show origin 2>/dev/null | sed -n 's/.*HEAD branch: //p' | head -n1)
+    fi
+
+    if [[ -z "$resolved" ]]; then
+      resolved=$(git ls-remote --heads origin main >/dev/null 2>&1 && echo "main" || true)
+    fi
+
+    if [[ -z "$resolved" ]]; then
+      resolved=$(git ls-remote --heads origin master >/dev/null 2>&1 && echo "master" || true)
+    fi
+  fi
+
+  if [[ -z "$resolved" ]]; then
+    cleanup_on_error "Unable to determine a valid base branch on origin"
+  fi
+
+  BASE_BRANCH="$resolved"
+  log_info "Using base branch: $BASE_BRANCH"
+}
+
+resolve_base_branch
+
 BRANCH_NAME="codex/issue-${ISSUE_NUMBER}"
 
 git fetch origin "$BASE_BRANCH"
