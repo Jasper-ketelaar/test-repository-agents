@@ -96,6 +96,8 @@ jobs:
           git init .
           git remote add origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
           git fetch --prune origin "+refs/heads/*:refs/remotes/origin/*"
+          # Self-hosted runners may keep files from previous jobs; remove them before checkout.
+          git clean -ffdx
 
           target_ref="${GITHUB_REF_NAME:-${BASE_BRANCH}}"
           if git show-ref --verify --quiet "refs/remotes/origin/${target_ref}"; then
