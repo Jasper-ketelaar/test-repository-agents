@@ -17,19 +17,31 @@ inputs:
     required: false
     default: ''
   pr-labels:
-    description: 'Comma-separated labels to apply to the created PR'
+    description: 'Comma-separated labels to apply to the created PR (missing labels are auto-created)'
     required: false
     default: 'codex-generated'
   timeout-minutes:
     description: 'Timeout in minutes for the Codex execution'
     required: false
     default: '30'
+  factory-api-url:
+    description: 'Factory backend base URL (e.g. https://factory.silver-key.nl)'
+    required: false
+    default: ''
+  factory-api-token:
+    description: 'Shared token for posting run updates to Factory backend'
+    required: false
+    default: ''
+  factory-run-id:
+    description: 'Optional run ID override for Factory backend tracking'
+    required: false
+    default: ''
   dashboard-url:
-    description: 'URL of the factory-agents dashboard for status reporting (e.g. http://localhost:3888)'
+    description: '[Deprecated] Legacy dashboard URL. Use factory-api-url instead.'
     required: false
     default: ''
   dashboard-run-id:
-    description: 'Run ID in the dashboard to report status to'
+    description: '[Deprecated] Legacy run ID. Use factory-run-id instead.'
     required: false
     default: ''
 
@@ -48,12 +60,16 @@ runs:
       id: implement
       shell: bash
       env:
+        GH_TOKEN: ${{ inputs.repo-token }}
         GITHUB_TOKEN: ${{ inputs.repo-token }}
         ISSUE_NUMBER: ${{ inputs.issue-number }}
         BASE_BRANCH: ${{ inputs.base-branch }}
         EXTRA_PROMPT: ${{ inputs.extra-prompt }}
         PR_LABELS: ${{ inputs.pr-labels }}
         TIMEOUT_MINUTES: ${{ inputs.timeout-minutes }}
+        FACTORY_API_URL: ${{ inputs.factory-api-url }}
+        FACTORY_API_TOKEN: ${{ inputs.factory-api-token }}
+        FACTORY_RUN_ID: ${{ inputs.factory-run-id }}
         DASHBOARD_URL: ${{ inputs.dashboard-url }}
         DASHBOARD_RUN_ID: ${{ inputs.dashboard-run-id }}
         ACTION_PATH: ${{ github.action_path }}

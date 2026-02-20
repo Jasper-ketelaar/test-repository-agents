@@ -9,22 +9,65 @@ set -euo pipefail
 #   GITHUB_TOKEN, ISSUE_NUMBER, BASE_BRANCH, EXTRA_PROMPT,
 #   PR_LABELS, TIMEOUT_MINUTES, ACTION_PATH
 # Optional:
-#   DASHBOARD_URL - URL of the factory-agents dashboard (e.g. http://localhost:3888)
-#   DASHBOARD_RUN_ID - Run ID to report to (created by dashboard)
+#   FACTORY_API_URL - Factory backend base URL (e.g. https://factory.silver-key.nl)
+#   FACTORY_API_TOKEN - Shared token for /api/agent-runs/external/{id}
+#   FACTORY_RUN_ID - Run ID used for Factory backend tracking
+# Legacy fallback (deprecated):
+#   DASHBOARD_URL, DASHBOARD_RUN_ID
 # ---------------------------------------------------------------------------
 
 log_info()  { echo "[INFO]  $(date '+%H:%M:%S') $*"; }
 log_warn()  { echo "[WARN]  $(date '+%H:%M:%S') $*" >&2; }
 log_error() { echo "[ERROR] $(date '+%H:%M:%S') $*" >&2; }
 
-dashboard_update() {
-  if [[ -z "${DASHBOARD_URL:-}" || -z "${DASHBOARD_RUN_ID:-}" ]]; then
+FACTORY_API_URL="${FACTORY_API_URL:-${DASHBOARD_URL:-}}"
+FACTORY_RUN_ID="${FACTORY_RUN_ID:-${DASHBOARD_RUN_ID:-}}"
+if [[ -z "${FACTORY_RUN_ID:-}" && -n "${GITHUB_RUN_ID:-}" ]]; then
+  FACTORY_RUN_ID="gh-${GITHUB_RUN_ID}-${ISSUE_NUMBER:-0}"
+fi
+
+json_escape() {
+  local value="$1"
+  if command -v jq >/dev/null 2>&1; then
+    jq -Rn --arg v "$value" '$v'
+    return
+  fi
+  local escaped="${value//\\/\\\\}"
+  escaped="${escaped//\"/\\\"}"
+  printf '"%s"' "$escaped"
+}
+
+build_factory_metadata() {
+  local issue_number="0"
+  if [[ "${ISSUE_NUMBER:-}" =~ ^[0-9]+$ ]]; then
+    issue_number="${ISSUE_NUMBER}"
+  fi
+
+  local workflow_run_id="null"
+  if [[ "${GITHUB_RUN_ID:-}" =~ ^[0-9]+$ ]]; then
+    workflow_run_id="${GITHUB_RUN_ID}"
+  fi
+
+  local repo_json issue_title_json task_type_json trigger_json workflow_url_json
+  repo_json=$(json_escape "${GITHUB_REPOSITORY:-unknown/unknown}")
+  issue_title_json=$(json_escape "${ISSUE_TITLE:-Issue #${issue_number}}")
+  task_type_json=$(json_escape "${TASK_TYPE:-feature}")
+  trigger_json=$(json_escape "workflow")
+  workflow_url_json=$(json_escape "${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY:-unknown/unknown}/actions/runs/${GITHUB_RUN_ID:-}")
+
+  printf '"repo":%s,"issueNumber":%s,"issueTitle":%s,"taskType":%s,"trigger":%s,"workflowRunId":%s,"workflowUrl":%s' \
+    "$repo_json" "$issue_number" "$issue_title_json" "$task_type_json" "$trigger_json" "$workflow_run_id" "$workflow_url_json"
+}
+
+factory_update() {
+  if [[ -z "${FACTORY_API_URL:-}" || -z "${FACTORY_RUN_ID:-}" || -z "${FACTORY_API_TOKEN:-}" ]]; then
     return 0
   fi
   local json="$1"
   curl -s -X PATCH \
-    "${DASHBOARD_URL}/api/runs/${DASHBOARD_RUN_ID}" \
+    "${FACTORY_API_URL%/}/api/agent-runs/external/${FACTORY_RUN_ID}" \
     -H "Content-Type: application/json" \
+    -H "X-Factory-Agents-Token: ${FACTORY_API_TOKEN}" \
     -d "$json" > /dev/null 2>&1 || true
 }
 
@@ -35,9 +78,12 @@ cleanup_on_error() {
   local msg="${1:-Unexpected error}"
   log_error "$msg"
 
-  dashboard_update "{\"status\":\"failed\",\"error\":$(echo "$msg" | jq -Rs .),\"finishedAt\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}"
+  local escaped_msg
+  escaped_msg=$(json_escape "$msg")
+  factory_update "{$(build_factory_metadata),\"status\":\"failed\",\"error\":${escaped_msg},\"finishedAt\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}"
 
-  gh issue comment "$ISSUE_NUMBER" --body "$(cat <<EOF
+  if command -v gh >/dev/null 2>&1 && [[ "${ISSUE_NUMBER:-}" =~ ^[0-9]+$ ]]; then
+    gh issue comment "$ISSUE_NUMBER" --body "$(cat <<EOF
 ❌ **Codex auto-implementation failed**
 
 **Error**: $msg
@@ -45,6 +91,9 @@ cleanup_on_error() {
 See workflow run for details: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID
 EOF
 )" || true
+  else
+    log_warn "Skipping issue comment because gh CLI is unavailable"
+  fi
 
   if [[ "$PUSHED" == true && -n "$BRANCH_NAME" ]]; then
     log_warn "Cleaning up remote branch $BRANCH_NAME"
@@ -95,6 +144,8 @@ else
 fi
 
 log_info "Task type: $TASK_TYPE"
+
+factory_update "{$(build_factory_metadata),\"status\":\"queued\"}"
 
 # ── 4. Build prompt ────────────────────────────────────────────────────────
 
@@ -175,7 +226,8 @@ git config --local user.email "codex-bot@silver-key.nl"
 
 log_info "Created branch $BRANCH_NAME"
 
-dashboard_update "{\"status\":\"running\",\"branch\":\"$BRANCH_NAME\",\"startedAt\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}"
+BRANCH_JSON=$(json_escape "$BRANCH_NAME")
+factory_update "{$(build_factory_metadata),\"status\":\"running\",\"branch\":${BRANCH_JSON},\"startedAt\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}"
 
 # ── 6. Run Codex ──────────────────────────────────────────────────────────
 
@@ -262,25 +314,33 @@ Closes #${ISSUE_NUMBER}
 EOF
 )"
 
-LABEL_ARGS=""
-IFS=',' read -ra LABELS <<< "${PR_LABELS:-}"
-for label in "${LABELS[@]}"; do
-  label=$(echo "$label" | xargs)
-  [[ -n "$label" ]] && LABEL_ARGS="$LABEL_ARGS --label $label"
-done
-
 PR_URL=$(gh pr create \
   --base "$BASE_BRANCH" \
   --head "$BRANCH_NAME" \
   --title "$PR_TITLE" \
-  --body "$PR_BODY" \
-  $LABEL_ARGS)
+  --body "$PR_BODY")
 
 PR_NUMBER=$(echo "$PR_URL" | grep -o '[0-9]*$')
 
 log_info "Created PR #$PR_NUMBER: $PR_URL"
 
-dashboard_update "{\"status\":\"success\",\"prNumber\":$PR_NUMBER,\"prUrl\":\"$PR_URL\",\"finishedAt\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}"
+# Add labels in a best-effort way; create missing labels automatically.
+IFS=',' read -ra LABELS <<< "${PR_LABELS:-}"
+for label in "${LABELS[@]}"; do
+  label=$(echo "$label" | xargs)
+  [[ -z "$label" ]] && continue
+
+  if ! gh label create "$label" --description "Auto-generated by factory-agents" --color "0E8A16" --force >/dev/null 2>&1; then
+    log_warn "Could not create or update label '$label'; continuing without failing"
+  fi
+
+  if ! gh pr edit "$PR_NUMBER" --add-label "$label" >/dev/null 2>&1; then
+    log_warn "Could not add label '$label' to PR #$PR_NUMBER"
+  fi
+done
+
+PR_URL_JSON=$(json_escape "$PR_URL")
+factory_update "{$(build_factory_metadata),\"status\":\"success\",\"prNumber\":$PR_NUMBER,\"prUrl\":${PR_URL_JSON},\"finishedAt\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}"
 
 # ── 10. Comment on issue ─────────────────────────────────────────────────
 
