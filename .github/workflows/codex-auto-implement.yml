@@ -88,10 +88,24 @@ jobs:
       pr-number: ${{ steps.implement.outputs.pr-number }}
       pr-url: ${{ steps.implement.outputs.pr-url }}
     steps:
-      - name: Checkout target repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+      - name: Checkout target repository (no actions/checkout)
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .git
+          git init .
+          git remote add origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git fetch --prune origin "+refs/heads/*:refs/remotes/origin/*"
+
+          target_ref="${GITHUB_REF_NAME:-${BASE_BRANCH}}"
+          if git show-ref --verify --quiet "refs/remotes/origin/${target_ref}"; then
+            git checkout -B "${target_ref}" "origin/${target_ref}"
+          elif git show-ref --verify --quiet "refs/remotes/origin/${BASE_BRANCH}"; then
+            git checkout -B "${BASE_BRANCH}" "origin/${BASE_BRANCH}"
+          else
+            echo "Unable to find target branch '${target_ref}' or base branch '${BASE_BRANCH}' on origin." >&2
+            exit 1
+          fi
 
       - name: Resolve factory-agents source ref
         id: source
@@ -103,13 +117,17 @@ jobs:
           echo "repo=$repo" >> "$GITHUB_OUTPUT"
           echo "ref=$ref" >> "$GITHUB_OUTPUT"
 
-      - name: Checkout factory-agents scripts
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ steps.source.outputs.repo }}
-          ref: ${{ steps.source.outputs.ref }}
-          path: .factory-agents
-          token: ${{ secrets.repo-token }}
+      - name: Checkout factory-agents scripts (no actions/checkout)
+        shell: bash
+        run: |
+          set -euo pipefail
+          repo="${{ steps.source.outputs.repo }}"
+          ref="${{ steps.source.outputs.ref }}"
+
+          rm -rf .factory-agents
+          git clone --no-checkout "https://x-access-token:${GITHUB_TOKEN}@github.com/${repo}.git" .factory-agents
+          git -C .factory-agents fetch origin "${ref}" --depth 1
+          git -C .factory-agents checkout FETCH_HEAD
 
       - name: Set action path
         shell: bash
