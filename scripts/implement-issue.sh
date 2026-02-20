@@ -183,7 +183,8 @@ TIMEOUT_SECONDS=$(( ${TIMEOUT_MINUTES:-30} * 60 ))
 
 log_info "Running Codex (timeout: ${TIMEOUT_MINUTES:-30}m)"
 
-codex exec --full-auto -q "$PROMPT" &
+# codex-cli 0.104.0+ accepts prompt as a positional argument for `exec`.
+codex exec --full-auto "$PROMPT" &
 CODEX_PID=$!
 
 ELAPSED=0
