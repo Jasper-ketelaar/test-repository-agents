@@ -138,7 +138,7 @@ cleanup_on_error() {
     gh issue comment "$ISSUE_NUMBER" --body "$(cat <<MSG
 ❌ **Codex auto-implementation failed**
 
-**Phase**: \\`$PHASE\\`
+Phase: $PHASE
 **Error**: $msg
 
 See workflow run for details: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID
@@ -561,8 +561,8 @@ BODY
 ✅ **Codex auto-implementation complete**
 
 Pull request: $pr_url
-Branch: \`$branch_name\`
-Task type: \`$task_type\`
+Branch: $branch_name
+Task type: $task_type
 Files changed: $file_count
 
 A review comment will be posted to the PR in the next step.
