@@ -1,0 +1,172 @@
+name: Codex Auto-Implement
+
+on:
+  workflow_call:
+    inputs:
+      issue-number:
+        description: GitHub issue number to implement
+        required: true
+        type: number
+      base-branch:
+        description: Base branch to create the feature branch from
+        required: false
+        default: main
+        type: string
+      extra-prompt:
+        description: Additional instructions appended to the Codex prompt
+        required: false
+        default: ''
+        type: string
+      pr-labels:
+        description: Comma-separated labels to apply to the created PR
+        required: false
+        default: codex-generated
+        type: string
+      timeout-minutes:
+        description: Timeout in minutes for each Codex phase
+        required: false
+        default: 30
+        type: number
+      factory-api-url:
+        description: Factory backend base URL (optional)
+        required: false
+        default: ''
+        type: string
+      factory-run-id:
+        description: Optional run ID override for Factory backend tracking
+        required: false
+        default: ''
+        type: string
+      dashboard-url:
+        description: '[Deprecated] Legacy dashboard URL. Use factory-api-url instead.'
+        required: false
+        default: ''
+        type: string
+      dashboard-run-id:
+        description: '[Deprecated] Legacy run ID. Use factory-run-id instead.'
+        required: false
+        default: ''
+        type: string
+    secrets:
+      repo-token:
+        description: GitHub token with contents/issues/pull-requests write permissions
+        required: true
+      factory-api-token:
+        description: Shared token for factory backend updates (optional)
+        required: false
+
+    outputs:
+      pr-number:
+        description: The created pull request number
+        value: ${{ jobs.implement.outputs.pr-number }}
+      pr-url:
+        description: The created pull request URL
+        value: ${{ jobs.implement.outputs.pr-url }}
+
+jobs:
+  implement:
+    name: Research, Plan, Implement, Review
+    runs-on: [self-hosted, macOS]
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    env:
+      GH_TOKEN: ${{ secrets.repo-token }}
+      GITHUB_TOKEN: ${{ secrets.repo-token }}
+      ISSUE_NUMBER: ${{ inputs.issue-number }}
+      BASE_BRANCH: ${{ inputs.base-branch }}
+      EXTRA_PROMPT: ${{ inputs.extra-prompt }}
+      PR_LABELS: ${{ inputs.pr-labels }}
+      TIMEOUT_MINUTES: ${{ inputs.timeout-minutes }}
+      FACTORY_API_URL: ${{ inputs.factory-api-url }}
+      FACTORY_API_TOKEN: ${{ secrets.factory-api-token }}
+      FACTORY_RUN_ID: ${{ inputs.factory-run-id }}
+      DASHBOARD_URL: ${{ inputs.dashboard-url }}
+      DASHBOARD_RUN_ID: ${{ inputs.dashboard-run-id }}
+    outputs:
+      pr-number: ${{ steps.implement.outputs.pr-number }}
+      pr-url: ${{ steps.implement.outputs.pr-url }}
+    steps:
+      - name: Checkout target repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve factory-agents source ref
+        id: source
+        shell: bash
+        run: |
+          workflow_ref="${GITHUB_WORKFLOW_REF}"
+          repo="${workflow_ref%%/.github/workflows/*}"
+          ref="${workflow_ref##*@}"
+          echo "repo=$repo" >> "$GITHUB_OUTPUT"
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout factory-agents scripts
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ steps.source.outputs.repo }}
+          ref: ${{ steps.source.outputs.ref }}
+          path: .factory-agents
+          token: ${{ secrets.repo-token }}
+
+      - name: Set action path
+        shell: bash
+        run: |
+          echo "ACTION_PATH=${GITHUB_WORKSPACE}/.factory-agents" >> "$GITHUB_ENV"
+
+      - name: Ensure GitHub CLI is installed
+        shell: bash
+        run: |
+          if command -v gh >/dev/null 2>&1; then
+            exit 0
+          fi
+
+          echo "gh CLI not found, attempting installation..."
+
+          if command -v apt-get >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y gh
+          elif command -v brew >/dev/null 2>&1; then
+            brew install gh
+          else
+            echo "Unable to install gh automatically (no apt-get or brew available)." >&2
+            exit 1
+          fi
+
+          command -v gh >/dev/null 2>&1 || {
+            echo "gh installation failed or gh is still not on PATH." >&2
+            exit 1
+          }
+
+      - name: Prepare scripts
+        shell: bash
+        run: |
+          chmod +x \
+            "$ACTION_PATH/scripts/implement-issue.sh" \
+            "$ACTION_PATH/scripts/research.sh" \
+            "$ACTION_PATH/scripts/plan.sh" \
+            "$ACTION_PATH/scripts/implement.sh" \
+            "$ACTION_PATH/scripts/review.sh"
+
+      - name: Research
+        shell: bash
+        run: |
+          "$ACTION_PATH/scripts/research.sh"
+
+      - name: Plan
+        shell: bash
+        run: |
+          "$ACTION_PATH/scripts/plan.sh"
+
+      - name: Implement
+        id: implement
+        shell: bash
+        run: |
+          "$ACTION_PATH/scripts/implement.sh"
+
+      - name: Review
+        shell: bash
+        run: |
+          "$ACTION_PATH/scripts/review.sh"

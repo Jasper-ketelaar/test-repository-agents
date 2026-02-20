@@ -1,6 +1,6 @@
 # factory-agents
 
-A reusable GitHub Action that automatically implements GitHub issues using [OpenAI Codex CLI](https://github.com/openai/codex) and opens a pull request.
+A reusable GitHub workflow that automatically implements GitHub issues using [OpenAI Codex CLI](https://github.com/openai/codex) and opens a pull request.
 
 **Flow**: Issue labeled → Research → Plan → Implement → Review → PR opened and commented.
 
@@ -35,23 +35,14 @@ jobs:
     if: >-
       github.event_name == 'workflow_dispatch' ||
       github.event.label.name == 'codex'
-    runs-on: [self-hosted, macOS]
-    permissions:
-      contents: write
-      issues: write
-      pull-requests: write
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - uses: silver-key-it-consultancy/factory-agents@main
-        with:
-          issue-number: ${{ github.event.inputs.issue_number || github.event.issue.number }}
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-          factory-api-url: ${{ vars.FACTORY_API_URL }}
-          factory-api-token: ${{ secrets.FACTORY_AGENTS_UPDATE_TOKEN }}
-          factory-run-id: ${{ github.run_id }}-${{ github.event.inputs.issue_number || github.event.issue.number }}
+    uses: silver-key-it-consultancy/factory-agents/.github/workflows/codex-auto-implement.yml@main
+    with:
+      issue-number: ${{ github.event.inputs.issue_number || github.event.issue.number }}
+      factory-api-url: ${{ vars.FACTORY_API_URL }}
+      factory-run-id: ${{ github.run_id }}-${{ github.event.inputs.issue_number || github.event.issue.number }}
+    secrets:
+      repo-token: ${{ secrets.GITHUB_TOKEN }}
+      factory-api-token: ${{ secrets.FACTORY_AGENTS_UPDATE_TOKEN }}
 ```
 
 Then apply the `codex` label to any issue — or trigger the workflow manually with an issue number.
@@ -61,16 +52,21 @@ Then apply the `codex` label to any issue — or trigger the workflow manually w
 | Input | Required | Default | Description |
 |-------|----------|---------|-------------|
 | `issue-number` | Yes | — | GitHub issue number to implement |
-| `repo-token` | Yes | — | GitHub token (`GITHUB_TOKEN`) with write access to contents, issues, and pull-requests |
 | `base-branch` | No | `main` | Branch to create the feature branch from |
 | `extra-prompt` | No | `''` | Additional instructions appended to the Codex prompt |
 | `pr-labels` | No | `codex-generated` | Comma-separated labels for the created PR (missing labels are auto-created) |
 | `timeout-minutes` | No | `30` | Timeout for Codex execution |
 | `factory-api-url` | No | `''` | Factory backend base URL for run tracking updates |
-| `factory-api-token` | No | `''` | Shared token for `PATCH /api/agent-runs/external/{id}` |
 | `factory-run-id` | No | `''` | Run identifier used in Factory backend (defaults to `gh-{run_id}-{issue}`) |
 | `dashboard-url` | No | `''` | Deprecated legacy alias for `factory-api-url` |
 | `dashboard-run-id` | No | `''` | Deprecated legacy alias for `factory-run-id` |
+
+## Secrets
+
+| Secret | Required | Description |
+|--------|----------|-------------|
+| `repo-token` | Yes | GitHub token (`GITHUB_TOKEN`) with write access to contents, issues, and pull-requests |
+| `factory-api-token` | No | Shared token for `PATCH /api/agent-runs/external/{id}` |
 
 ## Outputs
 
@@ -114,34 +110,46 @@ If your repository contains a `CLAUDE.md` file in the root, its contents are aut
 ### With extra instructions
 
 ```yaml
-- uses: silver-key-it-consultancy/factory-agents@main
-  with:
-    issue-number: ${{ github.event.issue.number }}
-    repo-token: ${{ secrets.GITHUB_TOKEN }}
-    extra-prompt: 'Use TDD. Write tests before implementation.'
-    pr-labels: 'codex-generated,needs-review'
+jobs:
+  implement:
+    uses: silver-key-it-consultancy/factory-agents/.github/workflows/codex-auto-implement.yml@main
+    with:
+      issue-number: ${{ github.event.issue.number }}
+      extra-prompt: 'Use TDD. Write tests before implementation.'
+      pr-labels: 'codex-generated,needs-review'
+    secrets:
+      repo-token: ${{ secrets.GITHUB_TOKEN }}
 ```
 
 ### With a different base branch
 
 ```yaml
-- uses: silver-key-it-consultancy/factory-agents@main
-  with:
-    issue-number: ${{ github.event.issue.number }}
-    repo-token: ${{ secrets.GITHUB_TOKEN }}
-    base-branch: develop
+jobs:
+  implement:
+    uses: silver-key-it-consultancy/factory-agents/.github/workflows/codex-auto-implement.yml@main
+    with:
+      issue-number: ${{ github.event.issue.number }}
+      base-branch: develop
+    secrets:
+      repo-token: ${{ secrets.GITHUB_TOKEN }}
 ```
 
 ### Using outputs
 
 ```yaml
-- uses: silver-key-it-consultancy/factory-agents@main
-  id: codex
-  with:
-    issue-number: ${{ github.event.issue.number }}
-    repo-token: ${{ secrets.GITHUB_TOKEN }}
+jobs:
+  codex:
+    uses: silver-key-it-consultancy/factory-agents/.github/workflows/codex-auto-implement.yml@main
+    with:
+      issue-number: ${{ github.event.issue.number }}
+    secrets:
+      repo-token: ${{ secrets.GITHUB_TOKEN }}
 
-- run: echo "PR created at ${{ steps.codex.outputs.pr-url }}"
+  notify:
+    runs-on: ubuntu-latest
+    needs: codex
+    steps:
+      - run: echo "PR created at ${{ needs.codex.outputs.pr-url }}"
 ```
 
 ## Error Handling
