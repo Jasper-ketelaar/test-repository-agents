@@ -6,7 +6,7 @@ on:
       issue-number:
         description: GitHub issue number to implement
         required: true
-        type: number
+        type: string
       base-branch:
         description: Base branch to create the feature branch from
         required: false
@@ -25,8 +25,8 @@ on:
       timeout-minutes:
         description: Timeout in minutes for each Codex phase
         required: false
-        default: 30
-        type: number
+        default: '30'
+        type: string
       factory-api-url:
         description: Factory backend base URL (optional)
         required: false
