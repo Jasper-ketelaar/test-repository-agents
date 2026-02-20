@@ -47,6 +47,16 @@ on:
         required: false
         default: ''
         type: string
+      agents-repository:
+        description: Repository that contains factory-agents scripts
+        required: false
+        default: Jasper-ketelaar/test-repository-agents
+        type: string
+      agents-ref:
+        description: Ref (branch/tag/SHA) for factory-agents scripts repository
+        required: false
+        default: main
+        type: string
     secrets:
       repo-token:
         description: GitHub token with contents/issues/pull-requests write permissions
@@ -109,27 +119,24 @@ jobs:
             exit 1
           fi
 
-      - name: Resolve factory-agents source ref
-        id: source
-        shell: bash
-        run: |
-          workflow_ref="${GITHUB_WORKFLOW_REF}"
-          repo="${workflow_ref%%/.github/workflows/*}"
-          ref="${workflow_ref##*@}"
-          echo "repo=$repo" >> "$GITHUB_OUTPUT"
-          echo "ref=$ref" >> "$GITHUB_OUTPUT"
-
       - name: Checkout factory-agents scripts (no actions/checkout)
         shell: bash
         run: |
           set -euo pipefail
-          repo="${{ steps.source.outputs.repo }}"
-          ref="${{ steps.source.outputs.ref }}"
+          repo="${{ inputs.agents-repository }}"
+          ref="${{ inputs.agents-ref }}"
 
           rm -rf .factory-agents
           git clone --no-checkout "https://x-access-token:${GITHUB_TOKEN}@github.com/${repo}.git" .factory-agents
           git -C .factory-agents fetch origin "${ref}" --depth 1
           git -C .factory-agents checkout FETCH_HEAD
+
+          if [[ ! -f ".factory-agents/scripts/implement-issue.sh" ]]; then
+            echo "Factory-agents scripts not found in ${repo}@${ref}" >&2
+            echo "Expected: .factory-agents/scripts/implement-issue.sh" >&2
+            ls -la .factory-agents || true
+            exit 1
+          fi
 
       - name: Set action path
         shell: bash

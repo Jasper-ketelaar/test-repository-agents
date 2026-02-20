@@ -35,9 +35,15 @@ jobs:
     if: >-
       github.event_name == 'workflow_dispatch' ||
       github.event.label.name == 'codex'
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
     uses: silver-key-it-consultancy/factory-agents/.github/workflows/codex-auto-implement.yml@main
     with:
       issue-number: ${{ github.event.inputs.issue_number || github.event.issue.number }}
+      agents-repository: Jasper-ketelaar/test-repository-agents
+      agents-ref: main
       factory-api-url: ${{ vars.FACTORY_API_URL }}
       factory-run-id: ${{ github.run_id }}-${{ github.event.inputs.issue_number || github.event.issue.number }}
     secrets:
@@ -60,6 +66,8 @@ Then apply the `codex` label to any issue — or trigger the workflow manually w
 | `factory-run-id` | No | `''` | Run identifier used in Factory backend (defaults to `gh-{run_id}-{issue}`) |
 | `dashboard-url` | No | `''` | Deprecated legacy alias for `factory-api-url` |
 | `dashboard-run-id` | No | `''` | Deprecated legacy alias for `factory-run-id` |
+| `agents-repository` | No | `Jasper-ketelaar/test-repository-agents` | Repository containing the reusable workflow scripts |
+| `agents-ref` | No | `main` | Branch/tag/SHA for `agents-repository` |
 
 ## Secrets
 
@@ -112,6 +120,10 @@ If your repository contains a `CLAUDE.md` file in the root, its contents are aut
 ```yaml
 jobs:
   implement:
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
     uses: silver-key-it-consultancy/factory-agents/.github/workflows/codex-auto-implement.yml@main
     with:
       issue-number: ${{ github.event.issue.number }}
@@ -126,6 +138,10 @@ jobs:
 ```yaml
 jobs:
   implement:
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
     uses: silver-key-it-consultancy/factory-agents/.github/workflows/codex-auto-implement.yml@main
     with:
       issue-number: ${{ github.event.issue.number }}
@@ -139,6 +155,10 @@ jobs:
 ```yaml
 jobs:
   codex:
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
     uses: silver-key-it-consultancy/factory-agents/.github/workflows/codex-auto-implement.yml@main
     with:
       issue-number: ${{ github.event.issue.number }}
