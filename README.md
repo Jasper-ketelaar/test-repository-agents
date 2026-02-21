@@ -46,6 +46,8 @@ jobs:
       agents-ref: main
       factory-api-url: ${{ vars.FACTORY_API_URL }}
       factory-run-id: ${{ github.run_id }}-${{ github.event.inputs.issue_number || github.event.issue.number }}
+      # Optional when you already know the internal Factory ticket id
+      factory-ticket-id: ${{ vars.FACTORY_TICKET_ID }}
     secrets:
       repo-token: ${{ secrets.GITHUB_TOKEN }}
       factory-api-token: ${{ secrets.FACTORY_AGENTS_UPDATE_TOKEN }}
@@ -64,6 +66,7 @@ Then apply the `codex` label to any issue — or trigger the workflow manually w
 | `timeout-minutes` | No | `30` | Timeout for Codex execution |
 | `factory-api-url` | No | `''` | Factory backend base URL for run tracking updates |
 | `factory-run-id` | No | `''` | Run identifier used in Factory backend (defaults to `gh-{run_id}-{issue}`) |
+| `factory-ticket-id` | No | `''` | Optional internal Factory ticket ID to link the run with `/tickets/{id}` |
 | `agents-repository` | No | `Jasper-ketelaar/test-repository-agents` | Repository containing the reusable workflow scripts |
 | `agents-ref` | No | `main` | Branch/tag/SHA for `agents-repository` |
 
@@ -83,7 +86,7 @@ Then apply the `codex` label to any issue — or trigger the workflow manually w
 
 ## How It Works
 
-1. **Start announcement**: upserts a queued run in Factory as soon as the workflow starts (when `factory-api-url` and `factory-api-token` are configured)
+1. **Start announcement**: upserts a queued run in Factory as soon as the workflow starts (when `factory-api-url` and `factory-api-token` are configured), including phase links and optional ticket linkage
 2. **Research step**: fetches issue details and analyzes codebase fit
 3. **Plan step**: writes a comprehensive implementation plan
 4. **Determines the task type** from issue labels:

@@ -21,6 +21,7 @@ log_error() { echo "[ERROR] $(date '+%H:%M:%S') $*" >&2; }
 
 FACTORY_API_URL="${FACTORY_API_URL:-}"
 FACTORY_RUN_ID="${FACTORY_RUN_ID:-}"
+FACTORY_TICKET_ID="${FACTORY_TICKET_ID:-}"
 if [[ -z "${FACTORY_RUN_ID:-}" && -n "${GITHUB_RUN_ID:-}" ]]; then
   FACTORY_RUN_ID="gh-${GITHUB_RUN_ID}-${ISSUE_NUMBER:-0}"
 fi
@@ -80,6 +81,47 @@ state_set_bool() {
   mv "$tmp_file" "$STATE_FILE"
 }
 
+build_workflow_url() {
+  printf '%s/%s/actions/runs/%s' \
+    "${GITHUB_SERVER_URL:-https://github.com}" \
+    "${GITHUB_REPOSITORY:-unknown/unknown}" \
+    "${GITHUB_RUN_ID:-}"
+}
+
+resolve_ticket_id() {
+  local ticket_id="${FACTORY_TICKET_ID:-}"
+  local state_ticket_id
+  state_ticket_id=$(state_get '.ticketId')
+  if [[ "$state_ticket_id" =~ ^[0-9]+$ ]]; then
+    ticket_id="$state_ticket_id"
+  fi
+
+  if [[ "$ticket_id" =~ ^[0-9]+$ ]]; then
+    echo "$ticket_id"
+  fi
+  return 0
+}
+
+build_phase_links_json() {
+  local workflow_url_json
+  workflow_url_json=$(json_escape "$(build_workflow_url)")
+  printf '{"research":%s,"plan":%s,"implement":%s,"review":%s}' \
+    "$workflow_url_json" "$workflow_url_json" "$workflow_url_json" "$workflow_url_json"
+}
+
+build_phase_config_json() {
+  local phase="$1"
+  local phase_json phase_links_json
+  phase_json=$(json_escape "$phase")
+  phase_links_json=$(build_phase_links_json)
+  printf '{"currentPhase":%s,"phaseLinks":%s}' "$phase_json" "$phase_links_json"
+}
+
+extract_ticket_id_from_issue_body() {
+  local issue_body="$1"
+  echo "$issue_body" | sed -nE 's/.*[Ff]actory[[:space:]]+ticket:[[:space:]]*#([0-9]+).*/\1/p' | head -n1
+}
+
 build_factory_metadata() {
   local issue_number="0"
   if [[ "${ISSUE_NUMBER:-}" =~ ^[0-9]+$ ]]; then
@@ -103,15 +145,20 @@ build_factory_metadata() {
   [[ -z "$issue_title" ]] && issue_title="Issue #${issue_number}"
   [[ -z "$task_type" ]] && task_type="feature"
 
-  local repo_json issue_title_json task_type_json trigger_json workflow_url_json
+  local repo_json issue_title_json task_type_json trigger_json workflow_url_json ticket_id ticket_fragment
   repo_json=$(json_escape "${GITHUB_REPOSITORY:-unknown/unknown}")
   issue_title_json=$(json_escape "$issue_title")
   task_type_json=$(json_escape "$task_type")
   trigger_json=$(json_escape "workflow")
-  workflow_url_json=$(json_escape "${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY:-unknown/unknown}/actions/runs/${GITHUB_RUN_ID:-}")
+  workflow_url_json=$(json_escape "$(build_workflow_url)")
+  ticket_id=$(resolve_ticket_id || true)
+  ticket_fragment=""
+  if [[ "$ticket_id" =~ ^[0-9]+$ ]]; then
+    ticket_fragment=",\"ticketId\":${ticket_id}"
+  fi
 
-  printf '"repo":%s,"issueNumber":%s,"issueTitle":%s,"taskType":%s,"trigger":%s,"workflowRunId":%s,"workflowUrl":%s' \
-    "$repo_json" "$issue_number" "$issue_title_json" "$task_type_json" "$trigger_json" "$workflow_run_id" "$workflow_url_json"
+  printf '"repo":%s,"issueNumber":%s,"issueTitle":%s,"taskType":%s,"trigger":%s,"workflowRunId":%s,"workflowUrl":%s%s' \
+    "$repo_json" "$issue_number" "$issue_title_json" "$task_type_json" "$trigger_json" "$workflow_run_id" "$workflow_url_json" "$ticket_fragment"
 }
 
 factory_update() {
@@ -126,13 +173,39 @@ factory_update() {
     -d "$json" > /dev/null 2>&1 || true
 }
 
+factory_phase_update() {
+  local phase="$1"
+  local status="$2"
+  local message="${3:-}"
+  local extra_fields="${4:-}"
+  local phase_json status_json message_json config_json payload
+
+  phase_json=$(json_escape "$phase")
+  status_json=$(json_escape "$status")
+  config_json=$(build_phase_config_json "$phase")
+  payload="{$(build_factory_metadata),\"phase\":${phase_json},\"status\":${status_json},\"config\":${config_json}"
+
+  if [[ -n "$message" ]]; then
+    message_json=$(json_escape "$message")
+    payload="$payload,\"log\":${message_json}"
+  fi
+
+  if [[ -n "$extra_fields" ]]; then
+    payload="$payload,${extra_fields}"
+  fi
+
+  payload="$payload}"
+  factory_update "$payload"
+}
+
 cleanup_on_error() {
   local msg="${1:-Unexpected error}"
   log_error "$msg"
 
-  local escaped_msg
+  local escaped_msg phase_name
   escaped_msg=$(json_escape "$msg")
-  factory_update "{$(build_factory_metadata),\"status\":\"failed\",\"error\":${escaped_msg},\"finishedAt\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}"
+  phase_name="${PHASE:-workflow}"
+  factory_phase_update "$phase_name" "failed" "[$phase_name] $msg" "\"error\":${escaped_msg},\"finishedAt\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\""
 
   if command -v gh >/dev/null 2>&1 && [[ "${ISSUE_NUMBER:-}" =~ ^[0-9]+$ ]]; then
     gh issue comment "$ISSUE_NUMBER" --body "$(cat <<MSG
@@ -306,6 +379,7 @@ phase_research() {
       issueTitle: $issueTitle,
       issueBody: $issueBody,
       issueLabels: $issueLabels,
+      ticketId: "",
       taskType: $taskType,
       baseBranch: $baseBranch,
       branchName: "",
@@ -318,7 +392,18 @@ phase_research() {
       reviewFile: $reviewFile
     }' > "$STATE_FILE"
 
-  factory_update "{$(build_factory_metadata),\"status\":\"queued\",\"phase\":\"research\"}"
+  if [[ "$FACTORY_TICKET_ID" =~ ^[0-9]+$ ]]; then
+    state_set_string "ticketId" "$FACTORY_TICKET_ID"
+  fi
+
+  local detected_ticket_id
+  detected_ticket_id=$(extract_ticket_id_from_issue_body "$issue_body")
+  if [[ "$detected_ticket_id" =~ ^[0-9]+$ ]]; then
+    state_set_string "ticketId" "$detected_ticket_id"
+    log_info "Linked Factory ticket #$detected_ticket_id from issue body"
+  fi
+
+  factory_phase_update "research" "running" "[research] started issue #$ISSUE_NUMBER"
 
   local prompt=""
   if [[ -f "$ACTION_PATH/prompts/research.md" ]]; then
@@ -345,11 +430,13 @@ phase_research() {
     cleanup_on_error "Research phase did not produce output"
   fi
 
+  factory_phase_update "research" "running" "[research] completed and saved findings"
   log_info "Research written to $RESEARCH_FILE"
 }
 
 phase_plan() {
   log_info "Phase 2/4: Plan"
+  factory_phase_update "plan" "running" "[plan] started"
 
   if [[ ! -f "$STATE_FILE" ]]; then
     cleanup_on_error "State file not found. Run research phase first."
@@ -390,6 +477,7 @@ phase_plan() {
     cleanup_on_error "Plan phase did not produce output"
   fi
 
+  factory_phase_update "plan" "running" "[plan] completed and saved plan"
   log_info "Plan written to $PLAN_FILE"
 }
 
@@ -440,7 +528,7 @@ phase_implement() {
 
   local branch_json
   branch_json=$(json_escape "$branch_name")
-  factory_update "{$(build_factory_metadata),\"status\":\"running\",\"phase\":\"implement\",\"branch\":${branch_json},\"startedAt\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}"
+  factory_phase_update "implement" "running" "[implement] started on branch $branch_name" "\"branch\":${branch_json},\"startedAt\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\""
 
   local prompt=""
   if [[ -f "$ACTION_PATH/prompts/base.md" ]]; then
@@ -572,7 +660,7 @@ BODY
     pr_number_json="$pr_number"
   fi
 
-  factory_update "{$(build_factory_metadata),\"status\":\"success\",\"phase\":\"implement\",\"prNumber\":${pr_number_json},\"prUrl\":${pr_url_json},\"finishedAt\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}"
+  factory_phase_update "implement" "running" "[implement] completed and opened PR #$pr_number" "\"prNumber\":${pr_number_json},\"prUrl\":${pr_url_json},\"branch\":${branch_json}"
 
   gh issue comment "$ISSUE_NUMBER" --body "$(cat <<MSG
 ✅ **Codex auto-implementation complete**
@@ -606,6 +694,8 @@ phase_review() {
   if [[ -z "$pr_number" ]]; then
     cleanup_on_error "PR number not found in state. Run implement phase first."
   fi
+
+  factory_phase_update "review" "running" "[review] started for PR #$pr_number"
 
   local pr_meta pr_diff
   pr_meta=$(gh pr view "$pr_number" --json title,body,baseRefName,headRefName,additions,deletions)
@@ -644,6 +734,7 @@ phase_review() {
   fi
 
   gh pr comment "$pr_number" --body-file "$REVIEW_FILE"
+  factory_phase_update "review" "success" "[review] completed and comment posted on PR #$pr_number" "\"finishedAt\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\""
 
   log_info "Posted review comment to PR #$pr_number"
 }

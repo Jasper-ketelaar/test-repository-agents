@@ -33,6 +33,11 @@ if [[ "${ISSUE_NUMBER:-}" =~ ^[0-9]+$ ]]; then
   issue_number="${ISSUE_NUMBER}"
 fi
 
+ticket_id_json="null"
+if [[ "${FACTORY_TICKET_ID:-}" =~ ^[0-9]+$ ]]; then
+  ticket_id_json="${FACTORY_TICKET_ID}"
+fi
+
 repo="${GITHUB_REPOSITORY:-unknown/unknown}"
 workflow_url="${GITHUB_SERVER_URL:-https://github.com}/${repo}/actions/runs/${GITHUB_RUN_ID:-}"
 started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -45,25 +50,38 @@ fi
 payload="$(jq -n \
   --arg repo "$repo" \
   --argjson issueNumber "$issue_number" \
+  --argjson ticketId "$ticket_id_json" \
   --arg issueTitle "Issue #${issue_number}" \
   --arg taskType "feature" \
   --arg trigger "workflow" \
   --arg status "queued" \
+  --arg phase "research" \
   --arg workflowUrl "$workflow_url" \
   --arg startedAt "$started_at" \
-  --arg log "Workflow started" \
+  --arg log "[workflow] started" \
   --argjson workflowRunId "$workflow_run_id_json" \
   '{
     repo: $repo,
     issueNumber: $issueNumber,
+    ticketId: $ticketId,
     issueTitle: $issueTitle,
     taskType: $taskType,
     trigger: $trigger,
     status: $status,
+    phase: $phase,
     workflowRunId: $workflowRunId,
     workflowUrl: $workflowUrl,
     startedAt: $startedAt,
-    log: $log
+    log: $log,
+    config: {
+      currentPhase: $phase,
+      phaseLinks: {
+        research: $workflowUrl,
+        plan: $workflowUrl,
+        implement: $workflowUrl,
+        review: $workflowUrl
+      }
+    }
   }'
 )"
 

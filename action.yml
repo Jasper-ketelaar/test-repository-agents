@@ -36,6 +36,10 @@ inputs:
     description: 'Optional run ID override for Factory backend tracking'
     required: false
     default: ''
+  factory-ticket-id:
+    description: 'Optional Factory ticket ID to link the run to'
+    required: false
+    default: ''
 
 outputs:
   pr-number:
@@ -61,6 +65,7 @@ runs:
         FACTORY_API_URL: ${{ inputs.factory-api-url }}
         FACTORY_API_TOKEN: ${{ inputs.factory-api-token }}
         FACTORY_RUN_ID: ${{ inputs.factory-run-id }}
+        FACTORY_TICKET_ID: ${{ inputs.factory-ticket-id }}
         ACTION_PATH: ${{ github.action_path }}
       run: |
         chmod +x "$ACTION_PATH/scripts/announce-start.sh"
@@ -80,6 +85,7 @@ runs:
         FACTORY_API_URL: ${{ inputs.factory-api-url }}
         FACTORY_API_TOKEN: ${{ inputs.factory-api-token }}
         FACTORY_RUN_ID: ${{ inputs.factory-run-id }}
+        FACTORY_TICKET_ID: ${{ inputs.factory-ticket-id }}
         ACTION_PATH: ${{ github.action_path }}
       run: |
         chmod +x "$ACTION_PATH/scripts/implement-issue.sh" \
@@ -100,6 +106,7 @@ runs:
         FACTORY_API_URL: ${{ inputs.factory-api-url }}
         FACTORY_API_TOKEN: ${{ inputs.factory-api-token }}
         FACTORY_RUN_ID: ${{ inputs.factory-run-id }}
+        FACTORY_TICKET_ID: ${{ inputs.factory-ticket-id }}
         ACTION_PATH: ${{ github.action_path }}
       run: |
         chmod +x "$ACTION_PATH/scripts/implement-issue.sh" \
@@ -120,6 +127,7 @@ runs:
         FACTORY_API_URL: ${{ inputs.factory-api-url }}
         FACTORY_API_TOKEN: ${{ inputs.factory-api-token }}
         FACTORY_RUN_ID: ${{ inputs.factory-run-id }}
+        FACTORY_TICKET_ID: ${{ inputs.factory-ticket-id }}
         ACTION_PATH: ${{ github.action_path }}
       run: |
         chmod +x "$ACTION_PATH/scripts/implement-issue.sh" \
@@ -140,6 +148,7 @@ runs:
         FACTORY_API_URL: ${{ inputs.factory-api-url }}
         FACTORY_API_TOKEN: ${{ inputs.factory-api-token }}
         FACTORY_RUN_ID: ${{ inputs.factory-run-id }}
+        FACTORY_TICKET_ID: ${{ inputs.factory-ticket-id }}
         ACTION_PATH: ${{ github.action_path }}
       run: |
         chmod +x "$ACTION_PATH/scripts/implement-issue.sh" \

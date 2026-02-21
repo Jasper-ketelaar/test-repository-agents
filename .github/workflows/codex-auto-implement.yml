@@ -37,6 +37,11 @@ on:
         required: false
         default: ''
         type: string
+      factory-ticket-id:
+        description: Optional Factory ticket ID to link the run to
+        required: false
+        default: ''
+        type: string
       agents-repository:
         description: Repository that contains factory-agents scripts
         required: false
@@ -82,6 +87,7 @@ jobs:
       FACTORY_API_URL: ${{ inputs.factory-api-url }}
       FACTORY_API_TOKEN: ${{ secrets.factory-api-token }}
       FACTORY_RUN_ID: ${{ inputs.factory-run-id }}
+      FACTORY_TICKET_ID: ${{ inputs.factory-ticket-id }}
     outputs:
       pr-number: ${{ steps.implement.outputs.pr-number }}
       pr-url: ${{ steps.implement.outputs.pr-url }}
@@ -104,7 +110,12 @@ jobs:
       - name: Set action path
         shell: bash
         run: |
-          echo "ACTION_PATH=${GITHUB_WORKSPACE}/.factory-agents-src" >> "$GITHUB_ENV"
+          tmp_action_path="${RUNNER_TEMP}/factory-agents-src"
+          rm -rf "$tmp_action_path"
+          mkdir -p "$tmp_action_path"
+          cp -R "${GITHUB_WORKSPACE}/.factory-agents-src/." "$tmp_action_path/"
+          rm -rf "${GITHUB_WORKSPACE}/.factory-agents-src"
+          echo "ACTION_PATH=$tmp_action_path" >> "$GITHUB_ENV"
 
       - name: Ensure GitHub CLI is installed
         shell: bash
@@ -146,6 +157,7 @@ jobs:
           FACTORY_API_URL: ${{ inputs.factory-api-url }}
           FACTORY_API_TOKEN: ${{ secrets.factory-api-token }}
           FACTORY_RUN_ID: ${{ inputs.factory-run-id }}
+          FACTORY_TICKET_ID: ${{ inputs.factory-ticket-id }}
           ISSUE_NUMBER: ${{ inputs.issue-number }}
         run: |
           if [[ -z "${FACTORY_API_URL:-}" || -z "${FACTORY_API_TOKEN:-}" ]]; then
@@ -170,6 +182,11 @@ jobs:
             issue_number="${ISSUE_NUMBER}"
           fi
 
+          ticket_id_json="null"
+          if [[ "${FACTORY_TICKET_ID:-}" =~ ^[0-9]+$ ]]; then
+            ticket_id_json="${FACTORY_TICKET_ID}"
+          fi
+
           repo="${GITHUB_REPOSITORY:-unknown/unknown}"
           workflow_url="${GITHUB_SERVER_URL:-https://github.com}/${repo}/actions/runs/${GITHUB_RUN_ID:-}"
           started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -182,25 +199,38 @@ jobs:
           payload="$(jq -n \
             --arg repo "$repo" \
             --argjson issueNumber "$issue_number" \
+            --argjson ticketId "$ticket_id_json" \
             --arg issueTitle "Issue #${issue_number}" \
             --arg taskType "feature" \
             --arg trigger "workflow" \
             --arg status "queued" \
+            --arg phase "research" \
             --arg workflowUrl "$workflow_url" \
             --arg startedAt "$started_at" \
-            --arg log "Workflow started" \
+            --arg log "[workflow] started" \
             --argjson workflowRunId "$workflow_run_id_json" \
             '{
               repo: $repo,
               issueNumber: $issueNumber,
+              ticketId: $ticketId,
               issueTitle: $issueTitle,
               taskType: $taskType,
               trigger: $trigger,
               status: $status,
+              phase: $phase,
               workflowRunId: $workflowRunId,
               workflowUrl: $workflowUrl,
               startedAt: $startedAt,
-              log: $log
+              log: $log,
+              config: {
+                currentPhase: $phase,
+                phaseLinks: {
+                  research: $workflowUrl,
+                  plan: $workflowUrl,
+                  implement: $workflowUrl,
+                  review: $workflowUrl
+                }
+              }
             }'
           )"
 
