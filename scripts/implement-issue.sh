@@ -117,6 +117,34 @@ build_phase_config_json() {
   printf '{"currentPhase":%s,"phaseLinks":%s}' "$phase_json" "$phase_links_json"
 }
 
+build_phase_output_config_json() {
+  local phase="$1"
+  local output_content="$2"
+  local phase_links_json
+  phase_links_json=$(build_phase_links_json)
+  jq -cn \
+    --arg phase "$phase" \
+    --arg output "$output_content" \
+    --argjson phaseLinks "$phase_links_json" \
+    '{
+      currentPhase: $phase,
+      phaseLinks: $phaseLinks,
+      phaseOutputs: {
+        ($phase): $output
+      }
+    }'
+}
+
+truncate_for_factory() {
+  local value="$1"
+  local max_chars="${2:-120000}"
+  if (( ${#value} <= max_chars )); then
+    printf '%s' "$value"
+    return
+  fi
+  printf '%s\n\n%s' "${value:0:max_chars}" "[truncated for Factory storage]"
+}
+
 extract_ticket_id_from_issue_body() {
   local issue_body="$1"
   echo "$issue_body" | sed -nE 's/.*[Ff]actory[[:space:]]+ticket:[[:space:]]*#([0-9]+).*/\1/p' | head -n1
@@ -178,11 +206,16 @@ factory_phase_update() {
   local status="$2"
   local message="${3:-}"
   local extra_fields="${4:-}"
+  local config_override="${5:-}"
   local phase_json status_json message_json config_json payload
 
   phase_json=$(json_escape "$phase")
   status_json=$(json_escape "$status")
-  config_json=$(build_phase_config_json "$phase")
+  if [[ -n "$config_override" ]]; then
+    config_json="$config_override"
+  else
+    config_json=$(build_phase_config_json "$phase")
+  fi
   payload="{$(build_factory_metadata),\"phase\":${phase_json},\"status\":${status_json},\"config\":${config_json}"
 
   if [[ -n "$message" ]]; then
@@ -430,6 +463,11 @@ phase_research() {
     cleanup_on_error "Research phase did not produce output"
   fi
 
+  local research_output research_config_json
+  research_output=$(truncate_for_factory "$(cat "$RESEARCH_FILE")")
+  research_config_json=$(build_phase_output_config_json "research" "$research_output")
+  factory_phase_update "research" "running" "[research] output captured" "" "$research_config_json"
+
   factory_phase_update "research" "running" "[research] completed and saved findings"
   log_info "Research written to $RESEARCH_FILE"
 }
@@ -476,6 +514,11 @@ phase_plan() {
   if [[ ! -s "$PLAN_FILE" ]]; then
     cleanup_on_error "Plan phase did not produce output"
   fi
+
+  local plan_output plan_config_json
+  plan_output=$(truncate_for_factory "$(cat "$PLAN_FILE")")
+  plan_config_json=$(build_phase_output_config_json "plan" "$plan_output")
+  factory_phase_update "plan" "running" "[plan] output captured" "" "$plan_config_json"
 
   factory_phase_update "plan" "running" "[plan] completed and saved plan"
   log_info "Plan written to $PLAN_FILE"
@@ -660,6 +703,19 @@ BODY
     pr_number_json="$pr_number"
   fi
 
+  local implement_summary implement_config_json
+  implement_summary=$(cat <<SUMMARY
+Branch: $branch_name
+PR: $pr_url
+Files changed: $file_count
+
+$changed_files
+SUMMARY
+)
+  implement_summary=$(truncate_for_factory "$implement_summary")
+  implement_config_json=$(build_phase_output_config_json "implement" "$implement_summary")
+  factory_phase_update "implement" "running" "[implement] output captured" "" "$implement_config_json"
+
   factory_phase_update "implement" "running" "[implement] completed and opened PR #$pr_number" "\"prNumber\":${pr_number_json},\"prUrl\":${pr_url_json},\"branch\":${branch_json}"
 
   gh issue comment "$ISSUE_NUMBER" --body "$(cat <<MSG
@@ -732,6 +788,11 @@ phase_review() {
   if [[ ! -s "$REVIEW_FILE" ]]; then
     cleanup_on_error "Review phase did not produce output"
   fi
+
+  local review_output review_config_json
+  review_output=$(truncate_for_factory "$(cat "$REVIEW_FILE")")
+  review_config_json=$(build_phase_output_config_json "review" "$review_output")
+  factory_phase_update "review" "running" "[review] output captured" "" "$review_config_json"
 
   gh pr comment "$pr_number" --body-file "$REVIEW_FILE"
   factory_phase_update "review" "success" "[review] completed and comment posted on PR #$pr_number" "\"finishedAt\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\""

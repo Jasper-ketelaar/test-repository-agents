@@ -95,7 +95,8 @@ Then apply the `codex` label to any issue — or trigger the workflow manually w
    - Anything else → feature prompt (default)
 5. **Implement step**: creates branch `codex/issue-{number}`, applies code changes, commits, pushes, and opens the PR
 6. **Review step**: reviews the produced PR diff and posts a PR comment
-7. **Comments on the issue** with status and PR link (or failure details)
+7. **Phase outputs**: research/plan/implement/review outputs are pushed into Factory run metadata for dashboard/ticket visibility
+8. **Comments on the issue** with status and PR link (or failure details)
 
 If `factory-api-url` and `factory-api-token` are set, the action also reports run lifecycle updates to the Factory backend.
 
