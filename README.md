@@ -2,7 +2,7 @@
 
 A reusable GitHub workflow that automatically implements GitHub issues using [OpenAI Codex CLI](https://github.com/openai/codex) and opens a pull request.
 
-**Flow**: Issue labeled → Research → Plan → Implement → Review → PR opened and commented.
+**Flow**: Issue labeled → Start run announced to Factory → Research → Plan → Implement → Review → PR opened and commented.
 
 ## Prerequisites
 
@@ -83,15 +83,16 @@ Then apply the `codex` label to any issue — or trigger the workflow manually w
 
 ## How It Works
 
-1. **Research step**: fetches issue details and analyzes codebase fit
-2. **Plan step**: writes a comprehensive implementation plan
-3. **Determines the task type** from issue labels:
+1. **Start announcement**: upserts a queued run in Factory as soon as the workflow starts (when `factory-api-url` and `factory-api-token` are configured)
+2. **Research step**: fetches issue details and analyzes codebase fit
+3. **Plan step**: writes a comprehensive implementation plan
+4. **Determines the task type** from issue labels:
    - `bug` label → bug fix prompt (minimal, root-cause focused)
    - `refactor` label → refactoring prompt (preserve behavior)
    - Anything else → feature prompt (default)
-4. **Implement step**: creates branch `codex/issue-{number}`, applies code changes, commits, pushes, and opens the PR
-5. **Review step**: reviews the produced PR diff and posts a PR comment
-6. **Comments on the issue** with status and PR link (or failure details)
+5. **Implement step**: creates branch `codex/issue-{number}`, applies code changes, commits, pushes, and opens the PR
+6. **Review step**: reviews the produced PR diff and posts a PR comment
+7. **Comments on the issue** with status and PR link (or failure details)
 
 If `factory-api-url` and `factory-api-token` are set, the action also reports run lifecycle updates to the Factory backend.
 

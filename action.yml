@@ -48,6 +48,24 @@ outputs:
 runs:
   using: 'composite'
   steps:
+    - name: Announce run start to Factory
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.repo-token }}
+        GITHUB_TOKEN: ${{ inputs.repo-token }}
+        ISSUE_NUMBER: ${{ inputs.issue-number }}
+        BASE_BRANCH: ${{ inputs.base-branch }}
+        EXTRA_PROMPT: ${{ inputs.extra-prompt }}
+        PR_LABELS: ${{ inputs.pr-labels }}
+        TIMEOUT_MINUTES: ${{ inputs.timeout-minutes }}
+        FACTORY_API_URL: ${{ inputs.factory-api-url }}
+        FACTORY_API_TOKEN: ${{ inputs.factory-api-token }}
+        FACTORY_RUN_ID: ${{ inputs.factory-run-id }}
+        ACTION_PATH: ${{ github.action_path }}
+      run: |
+        chmod +x "$ACTION_PATH/scripts/announce-start.sh"
+        "$ACTION_PATH/scripts/announce-start.sh"
+
     - name: Research
       id: research
       shell: bash
