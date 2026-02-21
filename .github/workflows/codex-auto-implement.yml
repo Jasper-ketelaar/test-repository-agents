@@ -99,45 +99,19 @@ jobs:
       pr-url: ${{ steps.implement.outputs.pr-url }}
     steps:
       - name: Checkout target repository
-        shell: bash
-        run: |
-          set -euo pipefail
-          rm -rf .git
-          git init .
-          git remote add origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
-          git fetch --prune origin "+refs/heads/*:refs/remotes/origin/*"
-          # Self-hosted runners may keep files from previous jobs; remove them before checkout.
-          git clean -ffdx
-
-          target_ref="${GITHUB_REF_NAME:-${BASE_BRANCH}}"
-          if git show-ref --verify --quiet "refs/remotes/origin/${target_ref}"; then
-            git checkout -B "${target_ref}" "origin/${target_ref}"
-          elif git show-ref --verify --quiet "refs/remotes/origin/${BASE_BRANCH}"; then
-            git checkout -B "${BASE_BRANCH}" "origin/${BASE_BRANCH}"
-          else
-            echo "Unable to find target branch '${target_ref}' or base branch '${BASE_BRANCH}' on origin." >&2
-            exit 1
-          fi
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.base-branch }}
+          token: ${{ secrets.repo-token }}
+          clean: true
 
       - name: Setup agent scripts
-        shell: bash
-        run: |
-          set -euo pipefail
-          repo="${{ inputs.agents-repository }}"
-          ref="${{ inputs.agents-ref }}"
-          agents_dir="${RUNNER_TEMP}/factory-agents-src"
-
-          rm -rf "${agents_dir}"
-          git clone --no-checkout "https://x-access-token:${GITHUB_TOKEN}@github.com/${repo}.git" "${agents_dir}"
-          git -C "${agents_dir}" fetch origin "${ref}" --depth 1
-          git -C "${agents_dir}" checkout FETCH_HEAD
-
-          if [[ ! -f "${agents_dir}/scripts/implement-issue.sh" ]]; then
-            echo "Factory-agents scripts not found in ${repo}@${ref}" >&2
-            echo "Expected: ${agents_dir}/scripts/implement-issue.sh" >&2
-            ls -la "${agents_dir}" || true
-            exit 1
-          fi
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.agents-repository }}
+          ref: ${{ inputs.agents-ref }}
+          token: ${{ secrets.repo-token }}
+          path: ${{ runner.temp }}/factory-agents-src
 
       - name: Set action path
         shell: bash
