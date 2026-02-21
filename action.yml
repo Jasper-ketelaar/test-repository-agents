@@ -36,14 +36,6 @@ inputs:
     description: 'Optional run ID override for Factory backend tracking'
     required: false
     default: ''
-  dashboard-url:
-    description: '[Deprecated] Legacy dashboard URL. Use factory-api-url instead.'
-    required: false
-    default: ''
-  dashboard-run-id:
-    description: '[Deprecated] Legacy run ID. Use factory-run-id instead.'
-    required: false
-    default: ''
 
 outputs:
   pr-number:
@@ -70,8 +62,6 @@ runs:
         FACTORY_API_URL: ${{ inputs.factory-api-url }}
         FACTORY_API_TOKEN: ${{ inputs.factory-api-token }}
         FACTORY_RUN_ID: ${{ inputs.factory-run-id }}
-        DASHBOARD_URL: ${{ inputs.dashboard-url }}
-        DASHBOARD_RUN_ID: ${{ inputs.dashboard-run-id }}
         ACTION_PATH: ${{ github.action_path }}
       run: |
         chmod +x "$ACTION_PATH/scripts/implement-issue.sh" \
@@ -92,8 +82,6 @@ runs:
         FACTORY_API_URL: ${{ inputs.factory-api-url }}
         FACTORY_API_TOKEN: ${{ inputs.factory-api-token }}
         FACTORY_RUN_ID: ${{ inputs.factory-run-id }}
-        DASHBOARD_URL: ${{ inputs.dashboard-url }}
-        DASHBOARD_RUN_ID: ${{ inputs.dashboard-run-id }}
         ACTION_PATH: ${{ github.action_path }}
       run: |
         chmod +x "$ACTION_PATH/scripts/implement-issue.sh" \
@@ -114,8 +102,6 @@ runs:
         FACTORY_API_URL: ${{ inputs.factory-api-url }}
         FACTORY_API_TOKEN: ${{ inputs.factory-api-token }}
         FACTORY_RUN_ID: ${{ inputs.factory-run-id }}
-        DASHBOARD_URL: ${{ inputs.dashboard-url }}
-        DASHBOARD_RUN_ID: ${{ inputs.dashboard-run-id }}
         ACTION_PATH: ${{ github.action_path }}
       run: |
         chmod +x "$ACTION_PATH/scripts/implement-issue.sh" \
@@ -136,8 +122,6 @@ runs:
         FACTORY_API_URL: ${{ inputs.factory-api-url }}
         FACTORY_API_TOKEN: ${{ inputs.factory-api-token }}
         FACTORY_RUN_ID: ${{ inputs.factory-run-id }}
-        DASHBOARD_URL: ${{ inputs.dashboard-url }}
-        DASHBOARD_RUN_ID: ${{ inputs.dashboard-run-id }}
         ACTION_PATH: ${{ github.action_path }}
       run: |
         chmod +x "$ACTION_PATH/scripts/implement-issue.sh" \
