@@ -19,8 +19,8 @@ log_info()  { echo "[INFO]  $(date '+%H:%M:%S') $*"; }
 log_warn()  { echo "[WARN]  $(date '+%H:%M:%S') $*" >&2; }
 log_error() { echo "[ERROR] $(date '+%H:%M:%S') $*" >&2; }
 
-FACTORY_API_URL="${FACTORY_API_URL:-${DASHBOARD_URL:-}}"
-FACTORY_RUN_ID="${FACTORY_RUN_ID:-${DASHBOARD_RUN_ID:-}}"
+FACTORY_API_URL="${FACTORY_API_URL:-}"
+FACTORY_RUN_ID="${FACTORY_RUN_ID:-}"
 if [[ -z "${FACTORY_RUN_ID:-}" && -n "${GITHUB_RUN_ID:-}" ]]; then
   FACTORY_RUN_ID="gh-${GITHUB_RUN_ID}-${ISSUE_NUMBER:-0}"
 fi

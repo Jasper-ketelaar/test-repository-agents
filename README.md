@@ -64,8 +64,6 @@ Then apply the `codex` label to any issue — or trigger the workflow manually w
 | `timeout-minutes` | No | `30` | Timeout for Codex execution |
 | `factory-api-url` | No | `''` | Factory backend base URL for run tracking updates |
 | `factory-run-id` | No | `''` | Run identifier used in Factory backend (defaults to `gh-{run_id}-{issue}`) |
-| `dashboard-url` | No | `''` | Deprecated legacy alias for `factory-api-url` |
-| `dashboard-run-id` | No | `''` | Deprecated legacy alias for `factory-run-id` |
 | `agents-repository` | No | `Jasper-ketelaar/test-repository-agents` | Repository containing the reusable workflow scripts |
 | `agents-ref` | No | `main` | Branch/tag/SHA for `agents-repository` |
 
