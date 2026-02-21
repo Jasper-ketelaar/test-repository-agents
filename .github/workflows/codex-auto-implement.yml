@@ -99,12 +99,12 @@ jobs:
           repository: ${{ inputs.agents-repository }}
           ref: ${{ inputs.agents-ref }}
           token: ${{ secrets.repo-token }}
-          path: ${{ runner.temp }}/factory-agents-src
+          path: .factory-agents-src
 
       - name: Set action path
         shell: bash
         run: |
-          echo "ACTION_PATH=${RUNNER_TEMP}/factory-agents-src" >> "$GITHUB_ENV"
+          echo "ACTION_PATH=${GITHUB_WORKSPACE}/.factory-agents-src" >> "$GITHUB_ENV"
 
       - name: Ensure GitHub CLI is installed
         shell: bash
